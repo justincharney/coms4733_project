@@ -13,7 +13,7 @@ A base repository for robotics simulation using MuJoCo physics engine. This repo
 ## Project Structure
 
 ```
-mujoco_robotics/
+coms4733_project/
 ├── models/              # XML model files
 │   ├── simple_pendulum.xml
 │   └── robot_arm.xml
@@ -41,7 +41,7 @@ mujoco_robotics/
 1. Clone or navigate to this repository:
 
 ```bash
-cd mujoco_robotics
+cd coms4733_project
 ```
 
 2. Create a virtual environment (recommended):
