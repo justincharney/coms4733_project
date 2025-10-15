@@ -1,0 +1,15 @@
+<mujoco model="graspable_cylinder">
+  <compiler angle="degree" coordinate="local"/>
+  
+  <asset>
+    <material name="cylinder_material" rgba="0.8 0.2 0.2 1"/>
+  </asset>
+  
+  <worldbody>
+    <body name="cylinder" pos="0 0 0.05">
+      <joint name="cylinder_free" type="free"/>
+      <geom name="cylinder" type="cylinder" size="0.02 0.06" 
+            material="cylinder_material" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>

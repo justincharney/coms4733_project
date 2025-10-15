@@ -1,0 +1,15 @@
+<mujoco model="graspable_cube">
+  <compiler angle="degree" coordinate="local"/>
+  
+  <asset>
+    <material name="cube_material" rgba="0.2 0.8 0.2 1"/>
+  </asset>
+  
+  <worldbody>
+    <body name="cube" pos="0 0 0.05">
+      <joint name="cube_free" type="free"/>
+      <geom name="cube" type="box" size="0.03 0.03 0.03" 
+            material="cube_material" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>

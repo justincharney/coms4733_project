@@ -1,0 +1,43 @@
+# Training Configuration
+
+training:
+  # General settings
+  num_episodes: 10000
+  max_steps_per_episode: 1000
+  save_frequency: 100
+  eval_frequency: 50
+  log_frequency: 10
+  
+  # Environment settings
+  environment:
+    config_path: "config/environments/grasping_env.yaml"
+    
+  # Agent settings
+  agent:
+    type: "DQN"  # Options: "DQN", "PolicyGradient"
+    config_path: "config/models/dqn_config.yaml"
+    
+  # Logging
+  logging:
+    log_dir: "data/logs"
+    tensorboard: true
+    wandb: false
+    wandb_project: "robotic-grasping"
+    
+  # Checkpointing
+  checkpointing:
+    save_dir: "data/checkpoints"
+    save_best: true
+    save_frequency: 100
+    
+  # Evaluation
+  evaluation:
+    num_eval_episodes: 10
+    eval_epsilon: 0.0  # No exploration during evaluation
+    
+  # Hardware
+  device: "auto"  # Options: "auto", "cpu", "cuda"
+  num_workers: 4
+  
+  # Random seeds
+  seed: 42

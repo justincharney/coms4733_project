@@ -1,0 +1,15 @@
+<mujoco model="graspable_sphere">
+  <compiler angle="degree" coordinate="local"/>
+  
+  <asset>
+    <material name="sphere_material" rgba="0.2 0.2 0.8 1"/>
+  </asset>
+  
+  <worldbody>
+    <body name="sphere" pos="0 0 0.05">
+      <joint name="sphere_free" type="free"/>
+      <geom name="sphere" type="sphere" size="0.03" 
+            material="sphere_material" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>

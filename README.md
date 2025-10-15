@@ -1,32 +1,92 @@
-# MuJoCo Robotics Simulation
+# Robotic Grasping using Deep Reinforcement Learning
 
-A base repository for robotics simulation using MuJoCo physics engine. This repository provides example models, controllers, and utilities to get started with robot simulation quickly.
+A deep reinforcement learning for robotic grasping tasks using MuJoCo physics simulation.
 
-## Features
+## Project Overview
 
-- Pre-configured MuJoCo environment
-- Example robot models (pendulum, robot arm)
-- Basic control examples (PD controller, sinusoidal motion)
-- Simulation recording and visualization tools
-- Utility functions for kinematics, dynamics, and contacts
+This project implements a deep reinforcement learning system for robotic grasping, featuring:
+- **Environment**: MuJoCo-based robotic arm simulation with gripper
+- **RL Algorithm**: Deep Q-Network (DQN) and Policy Gradient methods
+- **Task**: Object grasping and manipulation
+- **Visualization**: Real-time training monitoring and evaluation
 
 ## Project Structure
 
 ```
 coms4733_project/
-├── models/              # XML model files
-│   ├── simple_pendulum.xml
-│   └── robot_arm.xml
-├── examples/            # Example simulation scripts
-│   ├── basic_viewer.py
-│   ├── simple_controller.py
-│   └── record_simulation.py
-├── src/                 # Utility modules
+├── README.md                           # This file
+├── requirements.txt                    # Python dependencies
+├── config/                            # Configuration files
+│   ├── environments/                  # Environment configurations
+│   │   ├── grasping_env.yaml
+│   │   └── manipulation_env.yaml
+│   ├── models/                        # Model configurations
+│   │   ├── dqn_config.yaml
+│   │   └── policy_gradient_config.yaml
+│   └── training/                      # Training configurations
+│       ├── training_config.yaml
+│       └── hyperparameters.yaml
+├── src/                               # Source code
 │   ├── __init__.py
-│   └── utils.py
-├── assets/              # Generated assets (videos, plots)
-├── requirements.txt     # Python dependencies
-└── README.md
+│   ├── environments/                  # RL environments
+│   │   ├── __init__.py
+│   │   ├── base_env.py               # Base environment class
+│   │   ├── grasping_env.py           # Grasping environment
+│   │   └── utils.py                  # Environment utilities
+│   ├── agents/                        # RL agents
+│   │   ├── __init__.py
+│   │   ├── base_agent.py             # Base agent class
+│   │   ├── dqn_agent.py              # DQN implementation
+│   │   ├── policy_gradient_agent.py  # Policy gradient methods
+│   │   └── replay_buffer.py          # Experience replay
+│   ├── models/                        # Neural network models
+│   │   ├── __init__.py
+│   │   ├── q_network.py              # Q-network architecture
+│   │   ├── policy_network.py         # Policy network
+│   │   └── value_network.py          # Value function network
+│   ├── utils/                         # Utility functions
+│   │   ├── __init__.py
+│   │   ├── mujoco_utils.py           # MuJoCo-specific utilities
+│   │   ├── visualization.py          # Plotting and visualization
+│   │   ├── data_utils.py             # Data processing utilities
+│   │   └── metrics.py                # Evaluation metrics
+│   ├── training/                      # Training utilities
+│   │   ├── __init__.py
+│   │   ├── trainer.py                # Main training loop
+│   │   ├── evaluator.py              # Model evaluation
+│   │   └── checkpoint_manager.py     # Model checkpointing
+│   ├── train.py                       # Training script
+│   ├── evaluate.py                    # Evaluation script
+│   ├── visualize.py                   # Visualization script
+│   └── demo.py                        # Demo script
+├── models/                            # MuJoCo XML models
+│   ├── robot_arm.xml                 # Robot arm with gripper
+│   ├── simple_pendulum.xml           # Simple pendulum (for testing)
+│   ├── objects/                      # Graspable objects
+│   │   ├── cube.xml
+│   │   ├── cylinder.xml
+│   │   └── sphere.xml
+│   └── scenes/                       # Complete scenes
+│       ├── grasping_scene.xml
+│       └── manipulation_scene.xml
+├── examples/                          # Example implementations
+│   ├── basic_viewer.py               # Basic MuJoCo viewer
+│   ├── simple_controller.py          # Simple control example
+│   ├── record_simulation.py          # Simulation recording
+│   └── rl_examples/                  # RL-specific examples
+│       ├── dqn_example.py
+│       └── policy_gradient_example.py
+├── notebooks/                         # Jupyter notebooks
+├── data/                              # Data storage
+│   ├── raw/                          # Raw simulation data
+│   ├── processed/                    # Processed training data
+│   ├── checkpoints/                  # Model checkpoints
+│   └── logs/                         # Training logs
+├── results/                           # Results and outputs
+│   ├── plots/                        # Generated plots
+│   ├── videos/                       # Simulation videos
+│   ├── models/                       # Trained models
+└── └── reports/                      # Analysis reports
 ```
 
 ## Installation
@@ -38,9 +98,9 @@ coms4733_project/
 
 ### Setup
 
-1. Clone or navigate to this repository:
-
+1. Clone the repository:
 ```bash
+git clone <repository-url>
 cd coms4733_project
 ```
 
@@ -52,7 +112,6 @@ source venv/bin/activate
 ```
 
 3. Install dependencies:
-
 ```bash
 pip install -r requirements.txt
 ```
@@ -65,140 +124,58 @@ python -c "import mujoco; print(f'MuJoCo version: {mujoco.__version__}')"
 
 ## Quick Start
 
-### 1. Basic Viewer
-
-Launch an interactive viewer to visualize and interact with a robot model:
-
+### 1. Basic Environment Test
 ```bash
-cd examples
-python basic_viewer.py
+python examples/basic_viewer.py
 ```
 
-**Controls:**
-
-- Left mouse button: Rotate view
-- Right mouse button: Zoom
-- Middle mouse button: Pan
-- Space: Pause/resume
-- ESC: Exit
-
-### 2. Simple Controller
-
-Run a simulation with basic control:
-
+### 2. Train a DQN Agent
 ```bash
-python simple_controller.py
+python src/train.py --config config/training/training_config.yaml
 ```
 
-This demonstrates:
-
-- Sinusoidal motion control
-- PD (Proportional-Derivative) controller
-- Real-time visualization
-
-### 3. Record Simulation
-
-Record simulation data and render videos:
-
+### 3. Evaluate a Trained Model
 ```bash
-python record_simulation.py
+python src/evaluate.py --checkpoint data/checkpoints/dqn_model.pth
 ```
 
-Outputs:
-
-- `../assets/simulation_results.png` - Joint trajectory plots
-- `../assets/simulation.mp4` - Rendered video (requires imageio-ffmpeg)
-
-## Creating Custom Models
-
-MuJoCo uses XML files to define robots and environments. Here's a minimal example:
-
-```xml
-<mujoco model="my_robot">
-  <worldbody>
-    <body name="link1" pos="0 0 0">
-      <joint name="joint1" type="hinge" axis="0 0 1"/>
-      <geom name="geom1" type="cylinder" size="0.05 0.3"/>
-    </body>
-  </worldbody>
-
-  <actuator>
-    <motor name="motor1" joint="joint1" gear="1"/>
-  </actuator>
-</mujoco>
+### 4. Visualize Training Results
+```bash
+python src/visualize.py --log_dir data/logs/
 ```
 
-Save as `models/my_robot.xml` and load with:
+## Key Components
 
-```python
-import mujoco
-model = mujoco.MjModel.from_xml_path("models/my_robot.xml")
-```
+### Environments
+- **GraspingEnvironment**: Main environment for grasping tasks
+- **BaseEnvironment**: Abstract base class for all environments
+- Configurable object types, reward functions, and observation spaces
 
-## Using Utility Functions
+### Agents
+- **DQNAgent**: Deep Q-Network implementation with experience replay
+- **PolicyGradientAgent**: Policy gradient methods (REINFORCE, A2C)
+- **ReplayBuffer**: Experience replay buffer for off-policy learning
 
-The `src/utils.py` module provides helpful functions:
+### Models
+- **QNetwork**: Deep Q-Network architecture
+- **PolicyNetwork**: Policy network for continuous/discrete actions
+- **ValueNetwork**: Value function approximator
 
-```python
-from src.utils import *
+### Training
+- **Trainer**: Main training loop with logging and checkpointing
+- **Evaluator**: Model evaluation and performance metrics
+- **CheckpointManager**: Model saving and loading utilities
 
-# Print model information
-print_model_info(model)
+## Configuration
 
-# Get end-effector position
-pos, quat = get_body_pose(model, data, "end_effector")
+The project uses YAML configuration files for easy experimentation:
 
-# Compute Jacobian
-jacp, jacr = get_jacobian(model, data, "end_effector")
+- `config/environments/`: Environment-specific settings
+- `config/models/`: Neural network architectures
+- `config/training/`: Training hyperparameters
 
-# Simple IK solver
-target = np.array([0.3, 0.3, 0.5])
-success = compute_inverse_kinematics(model, data, "end_effector", target)
+## References
 
-# Get contact forces
-contacts = get_contact_forces(model, data)
-```
-
-## Writing Controllers
-
-Example PD controller:
-
-```python
-def pd_controller(target_pos, current_pos, current_vel, kp=10.0, kd=2.0):
-    """PD control law"""
-    error = target_pos - current_pos
-    ctrl = kp * error - kd * current_vel
-    return ctrl
-
-# In simulation loop:
-data.ctrl[:] = pd_controller(target, data.qpos, data.qvel)
-mujoco.mj_step(model, data)
-```
-
-## Advanced Topics
-
-### Rendering Offscreen
-
-```python
-import mujoco
-
-renderer = mujoco.Renderer(model, height=480, width=640)
-renderer.update_scene(data)
-pixels = renderer.render()
-```
-
-### Sensor Data
-
-```python
-# Access sensor readings
-sensor_data = data.sensordata
-print(f"Sensor values: {sensor_data}")
-```
-
-### Contact Handling
-
-```python
-for i in range(data.ncon):
-    contact = data.contact[i]
-    print(f"Contact {i}: distance={contact.dist}")
-```
+- "Robotic Grasping using Deep Reinforcement Learning" - Reference paper
+- MuJoCo Physics Engine Documentation
+- Deep Reinforcement Learning Algorithms (DQN, Policy Gradients)

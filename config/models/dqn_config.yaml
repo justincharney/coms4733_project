@@ -1,0 +1,36 @@
+# DQN Model Configuration
+
+model:
+  name: "DQN"
+  
+  # Network architecture
+  network:
+    type: "QNetwork"
+    hidden_layers: [512, 256, 128]
+    activation: "relu"
+    dropout: 0.1
+    
+  # Training parameters
+  training:
+    learning_rate: 0.001
+    batch_size: 64
+    target_update_frequency: 1000
+    epsilon_start: 1.0
+    epsilon_end: 0.01
+    epsilon_decay: 0.995
+    gamma: 0.99
+    
+  # Experience replay
+  replay_buffer:
+    capacity: 100000
+    min_size: 1000
+    
+  # Optimization
+  optimizer:
+    type: "Adam"
+    weight_decay: 1e-4
+    
+  # Loss function
+  loss:
+    type: "mse"
+    huber_delta: 1.0
