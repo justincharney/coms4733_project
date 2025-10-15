@@ -1,0 +1,34 @@
+<mujoco model="simple_pendulum">
+  <compiler angle="radian"/>
+
+  <option timestep="0.01" gravity="0 0 -9.81"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+    <quality shadowsize="4096"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+             rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+    <material name="grid" texture="grid" texrepeat="1 1" texuniform="true"
+              reflectance=".2"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1" diffuse="1 1 1"/>
+    <geom name="floor" type="plane" size="0 0 1" material="grid"/>
+
+    <body name="pole" pos="0 0 1">
+      <joint name="hinge" type="hinge" axis="0 1 0" damping="0.1"/>
+      <geom name="pole" type="cylinder" size="0.05 0.5" rgba="0.8 0.2 0.2 1"/>
+      <body name="tip" pos="0 0 -0.5">
+        <geom name="tip" type="sphere" size="0.1" rgba="0.2 0.8 0.2 1"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="torque" joint="hinge" gear="1" ctrllimited="true" ctrlrange="-5 5"/>
+  </actuator>
+</mujoco>

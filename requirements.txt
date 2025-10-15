@@ -1,0 +1,16 @@
+# Core MuJoCo dependencies
+mujoco>=3.0.0
+numpy>=1.24.0
+matplotlib>=3.7.0
+
+# Optional but recommended
+opencv-python>=4.8.0
+imageio>=2.31.0
+pillow>=10.0.0
+
+# For visualizations and rendering
+PyOpenGL>=3.1.6
+glfw>=2.6.0
+
+# Utilities
+pyyaml>=6.0
