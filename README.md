@@ -126,7 +126,7 @@ python -c "import mujoco; print(f'MuJoCo version: {mujoco.__version__}')"
 
 ### 1. Basic Environment Test
 ```bash
-python examples/basic_viewer.py
+mjpython examples/basic_viewer.py
 ```
 
 ### 2. Train a DQN Agent
