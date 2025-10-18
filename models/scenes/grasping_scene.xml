@@ -1,0 +1,144 @@
+<mujoco model="grasping_scene">
+  <compiler angle="degree" coordinate="local"/>
+
+  <option timestep="0.002" gravity="0 0 -9.81"/>
+
+  <visual>
+    <global offwidth="1280" offheight="720"/>
+    <quality shadowsize="4096"/>
+  </visual>
+
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" width="512" height="512"
+             rgb1=".1 .2 .3" rgb2=".2 .3 .4"/>
+    <material name="grid" texture="grid" texrepeat="1 1" texuniform="true"
+              reflectance=".2"/>
+    <material name="arm_material" rgba="0.7 0.7 0.9 1"/>
+    <material name="gripper_material" rgba="0.9 0.5 0.5 1"/>
+    <material name="cube_material" rgba="0.2 0.8 0.2 1"/>
+    <material name="box_material" rgba="0.8 0.4 0.2 1"/>
+    <material name="box_floor" rgba="0.6 0.3 0.1 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 3" dir="0 0 -1" diffuse="1 1 1"/>
+    <geom name="floor" type="plane" size="2 2 0.1" material="grid"/>
+
+    <!-- Robot Base -->
+    <body name="base" pos="0 0 0.1">
+      <geom name="base" type="cylinder" size="0.1 0.05" rgba="0.3 0.3 0.3 1"/>
+
+      <!-- Shoulder rotation joint -->
+      <body name="link1_base" pos="0 0 0.05">
+        <joint name="shoulder_rotate" type="hinge" axis="0 0 1" range="-180 180" damping="1"/>
+        <geom name="link1_base" type="capsule" fromto="0 0 0 0 0 0.15" size="0.04" material="arm_material"/>
+
+        <!-- Shoulder pitch joint (bend up/down) -->
+        <body name="link1" pos="0 0 0.15">
+          <joint name="shoulder_pitch" type="hinge" axis="0 1 0" range="-90 90" damping="0.8"/>
+          <geom name="link1" type="capsule" fromto="0 0 0 0 0 0.15" size="0.04" material="arm_material"/>
+
+          <!-- Elbow joint -->
+          <body name="link2" pos="0 0 0.15">
+            <joint name="elbow" type="hinge" axis="0 1 0" range="-150 150" damping="1"/>
+            <geom name="link2" type="capsule" fromto="0 0 0 0 0 0.2" size="0.035" material="arm_material"/>
+
+            <!-- Elbow roll joint (bend side-to-side) -->
+            <body name="link2_roll" pos="0 0 0.2">
+              <joint name="elbow_roll" type="hinge" axis="1 0 0" range="-45 45" damping="0.6"/>
+              <geom name="link2_roll" type="capsule" fromto="0 0 0 0 0 0.1" size="0.035" material="arm_material"/>
+
+              <!-- Wrist joint (twist) -->
+              <body name="link3" pos="0 0 0.1">
+                <joint name="wrist_twist" type="hinge" axis="0 0 1" range="-180 180" damping="0.8"/>
+                <geom name="link3" type="capsule" fromto="0 0 0 0 0 0.1" size="0.03" material="arm_material"/>
+
+                <!-- Wrist pitch joint (bend) -->
+                <body name="link4" pos="0 0 0.1">
+                  <joint name="wrist_pitch" type="hinge" axis="0 1 0" range="-90 90" damping="0.6"/>
+                  <geom name="link4" type="capsule" fromto="0 0 0 0 0 0.1" size="0.025" material="arm_material"/>
+
+                  <!-- End effector -->
+                  <body name="end_effector" pos="0 0 0.1">
+            <geom name="ee_sphere" type="sphere" size="0.03" rgba="1 0.2 0.2 1"/>
+
+            <!-- Simple gripper fingers -->
+            <body name="finger_left" pos="0.03 0 0">
+              <joint name="gripper_left" type="slide" axis="1 0 0" range="0 0.04" damping="0.1"/>
+              <geom name="finger_left" type="box" size="0.01 0.015 0.05"
+                    material="gripper_material" pos="0.01 0 -0.05"/>
+            </body>
+
+            <body name="finger_right" pos="-0.03 0 0">
+              <joint name="gripper_right" type="slide" axis="-1 0 0" range="0 0.04" damping="0.1"/>
+              <geom name="finger_right" type="box" size="0.01 0.015 0.05"
+                    material="gripper_material" pos="-0.01 0 -0.05"/>
+            </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+
+    <!-- Cube to grasp (initial position) -->
+    <body name="cube" pos="0.4 0.2 0.15">
+      <geom name="cube" type="box" size="0.03 0.03 0.03" 
+            material="cube_material" mass="0.1"/>
+    </body>
+
+    <!-- Target box container (goal position) -->
+    <body name="box_container" pos="0.2 -0.3 0">
+      <!-- Box floor -->
+      <geom name="box_floor" type="box" size="0.08 0.08 0.01" 
+            pos="0 0 0.01" material="box_floor" mass="0.5"/>
+      
+      <!-- Box walls -->
+      <geom name="box_wall_front" type="box" size="0.08 0.01 0.05" 
+            pos="0 0.08 0.05" material="box_material" mass="0.1"/>
+      <geom name="box_wall_back" type="box" size="0.08 0.01 0.05" 
+            pos="0 -0.08 0.05" material="box_material" mass="0.1"/>
+      <geom name="box_wall_left" type="box" size="0.01 0.08 0.05" 
+            pos="0.08 0 0.05" material="box_material" mass="0.1"/>
+      <geom name="box_wall_right" type="box" size="0.01 0.08 0.05" 
+            pos="-0.08 0 0.05" material="box_material" mass="0.1"/>
+    </body>
+
+    <!-- Visual markers for task understanding -->
+    <geom name="start_marker" type="cylinder" size="0.05 0.01" 
+          pos="0.4 0.2 0.01" rgba="0 1 0 0.3"/>
+    <geom name="goal_marker" type="cylinder" size="0.05 0.01" 
+          pos="0.2 -0.3 0.01" rgba="1 0 0 0.3"/>
+  </worldbody>
+
+  <actuator>
+    <motor name="shoulder_rotate_motor" joint="shoulder_rotate" gear="20" ctrllimited="true" ctrlrange="-10 10"/>
+    <motor name="shoulder_pitch_motor" joint="shoulder_pitch" gear="18" ctrllimited="true" ctrlrange="-8 8"/>
+    <motor name="elbow_motor" joint="elbow" gear="15" ctrllimited="true" ctrlrange="-10 10"/>
+    <motor name="elbow_roll_motor" joint="elbow_roll" gear="12" ctrllimited="true" ctrlrange="-6 6"/>
+    <motor name="wrist_twist_motor" joint="wrist_twist" gear="12" ctrllimited="true" ctrlrange="-8 8"/>
+    <motor name="wrist_pitch_motor" joint="wrist_pitch" gear="10" ctrllimited="true" ctrlrange="-6 6"/>
+    <motor name="gripper_left_motor" joint="gripper_left" gear="5" ctrllimited="true" ctrlrange="-2 2"/>
+    <motor name="gripper_right_motor" joint="gripper_right" gear="5" ctrllimited="true" ctrlrange="-2 2"/>
+  </actuator>
+
+  <sensor>
+    <jointpos name="shoulder_rotate_pos" joint="shoulder_rotate"/>
+    <jointpos name="shoulder_pitch_pos" joint="shoulder_pitch"/>
+    <jointpos name="elbow_pos" joint="elbow"/>
+    <jointpos name="elbow_roll_pos" joint="elbow_roll"/>
+    <jointpos name="wrist_twist_pos" joint="wrist_twist"/>
+    <jointpos name="wrist_pitch_pos" joint="wrist_pitch"/>
+    <jointvel name="shoulder_rotate_vel" joint="shoulder_rotate"/>
+    <jointvel name="shoulder_pitch_vel" joint="shoulder_pitch"/>
+    <jointvel name="elbow_vel" joint="elbow"/>
+    <jointvel name="elbow_roll_vel" joint="elbow_roll"/>
+    <jointvel name="wrist_twist_vel" joint="wrist_twist"/>
+    <jointvel name="wrist_pitch_vel" joint="wrist_pitch"/>
+    <framepos name="cube_pos" objtype="body" objname="cube"/>
+    <framepos name="end_effector_pos" objtype="body" objname="end_effector"/>
+    <framepos name="box_pos" objtype="body" objname="box_container"/>
+  </sensor>
+</mujoco>

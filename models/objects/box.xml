@@ -1,0 +1,27 @@
+<mujoco model="target_box">
+  <compiler angle="degree" coordinate="local"/>
+  
+  <asset>
+    <material name="box_material" rgba="0.8 0.4 0.2 1"/>
+    <material name="box_floor" rgba="0.6 0.3 0.1 1"/>
+  </asset>
+  
+  <worldbody>
+    <!-- Box container with walls and floor -->
+    <body name="box_container" pos="0 0 0">
+      <!-- Box floor -->
+      <geom name="box_floor" type="box" size="0.08 0.08 0.01" 
+            pos="0 0 0.01" material="box_floor" mass="0.5"/>
+      
+      <!-- Box walls -->
+      <geom name="box_wall_front" type="box" size="0.08 0.01 0.05" 
+            pos="0 0.08 0.05" material="box_material" mass="0.1"/>
+      <geom name="box_wall_back" type="box" size="0.08 0.01 0.05" 
+            pos="0 -0.08 0.05" material="box_material" mass="0.1"/>
+      <geom name="box_wall_left" type="box" size="0.01 0.08 0.05" 
+            pos="0.08 0 0.05" material="box_material" mass="0.1"/>
+      <geom name="box_wall_right" type="box" size="0.01 0.08 0.05" 
+            pos="-0.08 0 0.05" material="box_material" mass="0.1"/>
+    </body>
+  </worldbody>
+</mujoco>
