@@ -1,0 +1,163 @@
+<?xml version="1.0" ?>
+<mujoco model="manipulation_scene">
+  <compiler angle="radian" coordinate="local" inertiafromgeom="true"/>
+  <option timestep="0.002" gravity="0 0 -9.81" solver="Newton" iterations="50" tolerance="1e-10"/>
+  
+  <default>
+    <joint armature="0.1" damping="0.1" limited="true"/>
+    <geom conaffinity="0" condim="3" density="5.0" friction="1 0.5 0.001" rgba="0.8 0.6 0.4 1"/>
+    <motor ctrllimited="true" ctrlrange="-1 1"/>
+  </default>
+  
+  <asset>
+    <texture name="grid" type="2d" builtin="checker" rgb1="0.1 0.2 0.3" rgb2="0.2 0.3 0.4" width="300" height="300"/>
+    <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.2"/>
+    <texture name="skybox" type="skybox" builtin="gradient" rgb1="0.3 0.5 0.7" rgb2="0 0 0" width="512" height="512"/>
+    <material name="skybox" texture="skybox"/>
+  </asset>
+  
+  <worldbody>
+    <!-- Lighting -->
+    <light name="light" pos="0 0 4" dir="0 0 -1" diffuse="0.5 0.5 0.5" specular="0.1 0.1 0.1"/>
+    <light name="light2" pos="2 2 4" dir="-1 -1 -1" diffuse="0.3 0.3 0.3" specular="0.1 0.1 0.1"/>
+    
+    <!-- Ground -->
+    <geom name="ground" type="plane" size="2 2 0.1" rgba="0.5 0.5 0.5 1" material="grid"/>
+    
+    <!-- Table -->
+    <body name="table" pos="0 0 0.4">
+      <geom name="table_surface" type="box" size="0.8 0.8 0.05" rgba="0.6 0.4 0.2 1"/>
+      <geom name="table_leg1" type="cylinder" size="0.02 0.35" pos="-0.7 -0.7 0" rgba="0.4 0.3 0.2 1"/>
+      <geom name="table_leg2" type="cylinder" size="0.02 0.35" pos="0.7 -0.7 0" rgba="0.4 0.3 0.2 1"/>
+      <geom name="table_leg3" type="cylinder" size="0.02 0.35" pos="-0.7 0.7 0" rgba="0.4 0.3 0.2 1"/>
+      <geom name="table_leg4" type="cylinder" size="0.02 0.35" pos="0.7 0.7 0" rgba="0.4 0.3 0.2 1"/>
+    </body>
+    
+    <!-- Robot Arm -->
+    <body name="robot_base" pos="0 0 0.4">
+      <geom name="base" type="cylinder" size="0.1 0.1" rgba="0.3 0.3 0.3 1"/>
+      
+      <!-- Joint 1: Base rotation -->
+      <joint name="joint1" type="hinge" axis="0 0 1" pos="0 0 0" range="-3.14 3.14"/>
+      <body name="link1" pos="0 0 0.1">
+        <geom name="link1_geom" type="box" size="0.05 0.05 0.1" rgba="0.7 0.7 0.7 1"/>
+        
+        <!-- Joint 2: Shoulder -->
+        <joint name="joint2" type="hinge" axis="0 1 0" pos="0 0 0.1" range="-1.57 1.57"/>
+        <body name="link2" pos="0 0 0.1">
+          <geom name="link2_geom" type="box" size="0.05 0.05 0.1" rgba="0.6 0.6 0.6 1"/>
+          
+          <!-- Joint 3: Elbow -->
+          <joint name="joint3" type="hinge" axis="0 1 0" pos="0 0 0.1" range="-1.57 1.57"/>
+          <body name="link3" pos="0 0 0.1">
+            <geom name="link3_geom" type="box" size="0.05 0.05 0.1" rgba="0.5 0.5 0.5 1"/>
+            
+            <!-- Joint 4: Wrist 1 -->
+            <joint name="joint4" type="hinge" axis="0 1 0" pos="0 0 0.1" range="-1.57 1.57"/>
+            <body name="link4" pos="0 0 0.1">
+              <geom name="link4_geom" type="box" size="0.05 0.05 0.1" rgba="0.4 0.4 0.4 1"/>
+              
+              <!-- Joint 5: Wrist 2 -->
+              <joint name="joint5" type="hinge" axis="0 0 1" pos="0 0 0.1" range="-1.57 1.57"/>
+              <body name="link5" pos="0 0 0.1">
+                <geom name="link5_geom" type="box" size="0.05 0.05 0.1" rgba="0.3 0.3 0.3 1"/>
+                
+                <!-- Joint 6: Wrist 3 -->
+                <joint name="joint6" type="hinge" axis="0 1 0" pos="0 0 0.1" range="-1.57 1.57"/>
+                <body name="link6" pos="0 0 0.1">
+                  <geom name="link6_geom" type="box" size="0.05 0.05 0.1" rgba="0.2 0.2 0.2 1"/>
+                  
+                  <!-- Gripper -->
+                  <body name="gripper_base" pos="0 0 0.1">
+                    <geom name="gripper_base_geom" type="box" size="0.03 0.03 0.05" rgba="0.1 0.1 0.1 1"/>
+                    
+                    <!-- Left gripper finger -->
+                    <joint name="gripper_left" type="slide" axis="1 0 0" pos="0 0 0" range="0 0.05"/>
+                    <body name="gripper_left_finger" pos="0 0 0">
+                      <geom name="gripper_left_geom" type="box" size="0.01 0.01 0.05" pos="0.05 0 0" rgba="0.8 0.8 0.8 1"/>
+                    </body>
+                    
+                    <!-- Right gripper finger -->
+                    <joint name="gripper_right" type="slide" axis="-1 0 0" pos="0 0 0" range="0 0.05"/>
+                    <body name="gripper_right_finger" pos="0 0 0">
+                      <geom name="gripper_right_geom" type="box" size="0.01 0.01 0.05" pos="-0.05 0 0" rgba="0.8 0.8 0.8 1"/>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+    
+    <!-- Objects to manipulate -->
+    <body name="object1" pos="0.3 0.3 0.5">
+      <joint name="object1_joint" type="free"/>
+      <geom name="object1_geom" type="box" size="0.05 0.05 0.05" rgba="1 0 0 1" mass="0.1"/>
+    </body>
+    
+    <body name="object2" pos="-0.3 0.3 0.5">
+      <joint name="object2_joint" type="free"/>
+      <geom name="object2_geom" type="cylinder" size="0.03 0.05" rgba="0 1 0 1" mass="0.1"/>
+    </body>
+    
+    <body name="object3" pos="0.3 -0.3 0.5">
+      <joint name="object3_joint" type="free"/>
+      <geom name="object3_geom" type="sphere" size="0.04" rgba="0 0 1 1" mass="0.1"/>
+    </body>
+    
+    <!-- Target locations -->
+    <body name="target1" pos="0.5 0.5 0.5">
+      <geom name="target1_geom" type="box" size="0.08 0.08 0.02" rgba="1 1 0 0.3" contype="0" conaffinity="0"/>
+    </body>
+    
+    <body name="target2" pos="-0.5 0.5 0.5">
+      <geom name="target2_geom" type="box" size="0.08 0.08 0.02" rgba="1 1 0 0.3" contype="0" conaffinity="0"/>
+    </body>
+    
+    <body name="target3" pos="0.5 -0.5 0.5">
+      <geom name="target3_geom" type="box" size="0.08 0.08 0.02" rgba="1 1 0 0.3" contype="0" conaffinity="0"/>
+    </body>
+  </worldbody>
+  
+  <actuator>
+    <motor name="motor1" joint="joint1" gear="100"/>
+    <motor name="motor2" joint="joint2" gear="100"/>
+    <motor name="motor3" joint="joint3" gear="100"/>
+    <motor name="motor4" joint="joint4" gear="100"/>
+    <motor name="motor5" joint="joint5" gear="100"/>
+    <motor name="motor6" joint="joint6" gear="100"/>
+    <motor name="gripper_motor" joint="gripper_left" gear="50"/>
+  </actuator>
+  
+  <sensor>
+    <!-- Joint position sensors -->
+    <jointpos name="joint1_pos" joint="joint1"/>
+    <jointpos name="joint2_pos" joint="joint2"/>
+    <jointpos name="joint3_pos" joint="joint3"/>
+    <jointpos name="joint4_pos" joint="joint4"/>
+    <jointpos name="joint5_pos" joint="joint5"/>
+    <jointpos name="joint6_pos" joint="joint6"/>
+    <jointpos name="gripper_pos" joint="gripper_left"/>
+    
+    <!-- Joint velocity sensors -->
+    <jointvel name="joint1_vel" joint="joint1"/>
+    <jointvel name="joint2_vel" joint="joint2"/>
+    <jointvel name="joint3_vel" joint="joint3"/>
+    <jointvel name="joint4_vel" joint="joint4"/>
+    <jointvel name="joint5_vel" joint="joint5"/>
+    <jointvel name="joint6_vel" joint="joint6"/>
+    <jointvel name="gripper_vel" joint="gripper_left"/>
+    
+    <!-- Body position sensors -->
+    <framepos name="gripper_pos" objtype="body" objname="gripper_base"/>
+    <framepos name="object1_pos" objtype="body" objname="object1"/>
+    <framepos name="object2_pos" objtype="body" objname="object2"/>
+    <framepos name="object3_pos" objtype="body" objname="object3"/>
+    
+    <!-- Contact sensors -->
+    <touch name="gripper_left_touch" geom="gripper_left_geom"/>
+    <touch name="gripper_right_touch" geom="gripper_right_geom"/>
+  </sensor>
+</mujoco>

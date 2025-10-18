@@ -1,0 +1,38 @@
+# Policy Gradient Model Configuration
+model:
+  name: "PolicyGradientNetwork"
+  type: "policy_gradient"
+  
+# Network Architecture
+network:
+  hidden_layers: [256, 256, 128]
+  activation: "relu"
+  output_activation: "tanh"  # for continuous actions
+  
+# Policy Configuration
+policy:
+  type: "gaussian"  # or "categorical" for discrete actions
+  std_init: 0.5
+  std_min: 0.01
+  std_max: 2.0
+  std_decay: 0.9999
+  
+# Value Function Configuration
+value_function:
+  hidden_layers: [256, 256, 128]
+  activation: "relu"
+  
+# Training Configuration
+training:
+  learning_rate: 3e-4
+  value_lr: 1e-3
+  entropy_coef: 0.01
+  value_coef: 0.5
+  max_grad_norm: 0.5
+  
+# Algorithm Specific
+algorithm:
+  type: "PPO"  # or "A2C", "REINFORCE"
+  clip_ratio: 0.2
+  target_kl: 0.01
+  update_epochs: 4

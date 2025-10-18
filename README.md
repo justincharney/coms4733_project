@@ -73,9 +73,8 @@ coms4733_project/
 │   ├── basic_viewer.py               # Basic MuJoCo viewer
 │   ├── simple_controller.py          # Simple control example
 │   ├── record_simulation.py          # Simulation recording
-│   └── rl_examples/                  # RL-specific examples
-│       ├── dqn_example.py
-│       └── policy_gradient_example.py
+│   ├── dqn_example.py
+│   └── policy_gradient_example.py
 ├── notebooks/                         # Jupyter notebooks
 ├── data/                              # Data storage
 │   ├── raw/                          # Raw simulation data

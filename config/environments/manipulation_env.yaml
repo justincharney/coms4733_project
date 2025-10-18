@@ -1,0 +1,38 @@
+# Manipulation Environment Configuration
+environment:
+  name: "ManipulationEnvironment"
+  max_steps: 1000
+  time_step: 0.002
+  
+# Scene Configuration
+scene:
+  model_path: "models/scenes/manipulation_scene.xml"
+  robot_model: "models/robot_arm.xml"
+  
+# Object Configuration
+objects:
+  types: ["cube", "cylinder", "sphere"]
+  spawn_radius: 0.3
+  num_objects: 3
+  
+# Reward Configuration
+rewards:
+  grasp_success: 10.0
+  lift_success: 5.0
+  manipulation_success: 15.0
+  collision_penalty: -1.0
+  time_penalty: -0.01
+  
+# Observation Configuration
+observations:
+  include_joint_positions: true
+  include_joint_velocities: true
+  include_gripper_state: true
+  include_object_positions: true
+  include_robot_pose: true
+  
+# Action Configuration
+actions:
+  type: "continuous"  # or "discrete"
+  control_mode: "position"  # or "velocity", "torque"
+  action_dim: 7  # 6 DOF arm + 1 gripper
