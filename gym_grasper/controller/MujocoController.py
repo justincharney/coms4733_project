@@ -52,6 +52,10 @@ class MJ_Controller(object):
         self.reached_target = False
         self.current_output = np.zeros(len(self.sim.data.ctrl))
         self.image_counter = 0
+        self.render_counter = 0
+        self.render_every_n_steps = (
+            5  # Only render every N steps to prevent xvfb segfaults
+        )
         self.ee_chain = Chain.from_urdf_file(path + "/UR5+gripper/ur5_gripper.urdf")
         self.cam_matrix = None
         self.cam_init = False
@@ -399,8 +403,11 @@ class MJ_Controller(object):
                     break
 
                 self.sim.step()
-                if render:
-                    self.viewer.render()
+                if render and self.viewer is not None:
+                    # Throttle rendering to prevent xvfb segfaults
+                    self.render_counter += 1
+                    if self.render_counter % self.render_every_n_steps == 0:
+                        self.viewer.render()
                 steps += 1
 
             self.last_movement_steps = steps
@@ -539,6 +546,7 @@ class MJ_Controller(object):
         except Exception as e:
             print(e)
             print("Could not find an inverse kinematics solution.")
+            return None
 
     def ik_2(self, pose_target):
         """

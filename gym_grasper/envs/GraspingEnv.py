@@ -351,7 +351,8 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                 width=1000, height=1000, camera="side"
             )
             self.grasp_counter += 1
-            img_name = "Grasp_{}.png".format(self.grasp_counter)
+            os.makedirs("observations", exist_ok=True)
+            img_name = "observations/Grasp_{}.png".format(self.grasp_counter)
             cv.imwrite(img_name, cv.cvtColor(capture_rgb, cv.COLOR_BGR2RGB))
 
         # Open gripper again

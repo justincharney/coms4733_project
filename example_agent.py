@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+import os
+
+# IMPORTANT: Set this BEFORE importing mujoco_py or gym
+os.environ["MUJOCO_GL"] = "osmesa"
+
 import gym
 import numpy as np
 from termcolor import colored
