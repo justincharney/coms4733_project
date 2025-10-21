@@ -10,7 +10,7 @@ import time
 import numpy as np
 from simple_pid import PID
 from termcolor import colored
-import ikpy
+from ikpy.chain import Chain
 from pyquaternion import Quaternion
 import cv2 as cv
 import matplotlib.pyplot as plt
@@ -30,11 +30,19 @@ class MJ_Controller(object):
         path = os.path.realpath(__file__)
         path = str(Path(path).parent.parent.parent)
         if model is None:
-            self.model = mp.load_model_from_path(path + "/UR5+gripper/UR5gripper_2_finger.xml")
+            self.model = mp.load_model_from_path(
+                path + "/UR5+gripper/UR5gripper_2_finger.xml"
+            )
         else:
             self.model = model
         self.sim = mp.MjSim(self.model) if simulation is None else simulation
-        self.viewer = mp.MjViewer(self.sim) if viewer is None else viewer
+        # Handle viewer: None = auto-create, False = headless mode, otherwise use provided
+        if viewer is None:
+            self.viewer = mp.MjViewer(self.sim)
+        elif viewer is False:
+            self.viewer = None
+        else:
+            self.viewer = viewer
         self.create_lists()
         self.groups = defaultdict(list)
         self.groups["All"] = list(range(len(self.sim.data.ctrl)))
@@ -44,7 +52,7 @@ class MJ_Controller(object):
         self.reached_target = False
         self.current_output = np.zeros(len(self.sim.data.ctrl))
         self.image_counter = 0
-        self.ee_chain = ikpy.chain.Chain.from_urdf_file(path + "/UR5+gripper/ur5_gripper.urdf")
+        self.ee_chain = Chain.from_urdf_file(path + "/UR5+gripper/ur5_gripper.urdf")
         self.cam_matrix = None
         self.cam_init = False
         self.last_movement_steps = 0
@@ -61,13 +69,15 @@ class MJ_Controller(object):
         """
 
         try:
-            assert len(idx_list) <= len(self.sim.data.ctrl), "Too many joints specified!"
-            assert (
-                group_name not in self.groups.keys()
-            ), "A group with name {} already exists!".format(group_name)
-            assert np.max(idx_list) <= len(
-                self.sim.data.ctrl
-            ), "List contains invalid actuator ID (too high)"
+            assert len(idx_list) <= len(self.sim.data.ctrl), (
+                "Too many joints specified!"
+            )
+            assert group_name not in self.groups.keys(), (
+                "A group with name {} already exists!".format(group_name)
+            )
+            assert np.max(idx_list) <= len(self.sim.data.ctrl), (
+                "List contains invalid actuator ID (too high)"
+            )
 
             self.groups[group_name] = idx_list
             print("Created new control group '{}'.".format(group_name))
@@ -106,7 +116,11 @@ class MJ_Controller(object):
                 )
             )
 
-        print("\nJoints in kinematic chain: {}".format([i.name for i in self.ee_chain.links]))
+        print(
+            "\nJoints in kinematic chain: {}".format(
+                [i.name for i in self.ee_chain.links]
+            )
+        )
 
         print("\nPID Info: \n")
         for i in range(len(self.actuators)):
@@ -255,10 +269,12 @@ class MJ_Controller(object):
 
     def actuate_joint_group(self, group, motor_values):
         try:
-            assert group in self.groups.keys(), "No group with name {} exists!".format(group)
-            assert len(motor_values) == len(
-                self.groups[group]
-            ), "Invalid number of actuator values!"
+            assert group in self.groups.keys(), "No group with name {} exists!".format(
+                group
+            )
+            assert len(motor_values) == len(self.groups[group]), (
+                "Invalid number of actuator values!"
+            )
             for i, v in enumerate(self.groups[group]):
                 self.sim.data.ctrl[v] = motor_values[i]
 
@@ -292,11 +308,13 @@ class MJ_Controller(object):
         """
 
         try:
-            assert group in self.groups.keys(), "No group with name {} exists!".format(group)
+            assert group in self.groups.keys(), "No group with name {} exists!".format(
+                group
+            )
             if target is not None:
-                assert len(target) == len(
-                    self.groups[group]
-                ), "Mismatching target dimensions for group {}!".format(group)
+                assert len(target) == len(self.groups[group]), (
+                    "Mismatching target dimensions for group {}!".format(group)
+                )
             ids = self.groups[group]
             steps = 1
             result = ""
@@ -323,10 +341,14 @@ class MJ_Controller(object):
                 # We still want to actuate all motors towards their targets, otherwise the joints of non-controlled
                 # groups will start to drift
                 for j in range(len(self.sim.data.ctrl)):
-                    self.current_output[j] = self.actuators[j][4](current_joint_values[j])
+                    self.current_output[j] = self.actuators[j][4](
+                        current_joint_values[j]
+                    )
                     self.sim.data.ctrl[j] = self.current_output[j]
                 for i in ids:
-                    deltas[i] = abs(self.current_target_joint_values[i] - current_joint_values[i])
+                    deltas[i] = abs(
+                        self.current_target_joint_values[i] - current_joint_values[i]
+                    )
 
                 if steps % 1000 == 0 and target is not None and not quiet:
                     print(
@@ -393,12 +415,11 @@ class MJ_Controller(object):
             print("Could not move to requested joint target.")
 
     def set_group_joint_target(self, group, target):
-
         idx = self.groups[group]
         try:
-            assert len(target) == len(
-                idx
-            ), "Length of the target must match the number of actuated joints in the group."
+            assert len(target) == len(idx), (
+                "Length of the target must match the number of actuated joints in the group."
+            )
             self.current_target_joint_values[idx] = target
 
         except Exception as e:
@@ -457,7 +478,9 @@ class MJ_Controller(object):
         """
         joint_angles = self.ik(ee_position)
         if joint_angles is not None:
-            result = self.move_group_to_joint_target(group="Arm", target=joint_angles, **kwargs)
+            result = self.move_group_to_joint_target(
+                group="Arm", target=joint_angles, **kwargs
+            )
             # result = self.move_group_to_joint_target(group='Arm', target=joint_angles, tolerance=0.05, plot=plot, marker=marker, max_steps=max_steps, quiet=quiet, render=render)
         else:
             result = "No valid joint angles received, could not move EE to position."
@@ -478,14 +501,15 @@ class MJ_Controller(object):
         """
 
         try:
-            assert (
-                len(ee_position) == 3
-            ), "Invalid EE target! Please specify XYZ-coordinates in a list of length 3."
+            assert len(ee_position) == 3, (
+                "Invalid EE target! Please specify XYZ-coordinates in a list of length 3."
+            )
             self.current_carthesian_target = ee_position.copy()
             # We want to be able to spedify the ee position in world coordinates, so subtract the position of the
             # base link. This is because the inverse kinematics solver chain starts at the base link.
             ee_position_base = (
-                ee_position - self.sim.data.body_xpos[self.model.body_name2id("base_link")]
+                ee_position
+                - self.sim.data.body_xpos[self.model.body_name2id("base_link")]
             )
 
             # By adding the appr. distance between ee_link and grasp center, we can now specify a world target position
@@ -558,7 +582,11 @@ class MJ_Controller(object):
         for i in range(len(self.model.jnt_qposadr)):
             # for i in range(self.model.njnt):
             name = self.model.joint_id2name(i)
-            print("Current angle for joint {}: {}".format(name, self.sim.data.get_joint_qpos(name)))
+            print(
+                "Current angle for joint {}: {}".format(
+                    name, self.sim.data.get_joint_qpos(name)
+                )
+            )
             # print('Current angle for joint {}: {}'.format(self.model.joint_id2name(i), self.sim.data.qpos[i]))
 
         print("\n################################################")
@@ -609,7 +637,8 @@ class MJ_Controller(object):
             self.sim.data.ctrl[2] = -2.0
             self.sim.data.ctrl[0] = -2.0
             self.sim.step()
-            self.viewer.render()
+            if self.viewer is not None:
+                self.viewer.render()
 
             if t > 200:
                 self.sim.data.ctrl[6] = 1.0
@@ -680,7 +709,9 @@ class MJ_Controller(object):
             axis.xaxis.set_label_coords(0.05, -0.1)
             axis.yaxis.set_label_coords(1.05, 0.5)
             axis.axhline(
-                self.current_target_joint_values[self.groups[group][i]], color="g", linestyle="--"
+                self.current_target_joint_values[self.groups[group][i]],
+                color="g",
+                linestyle="--",
             )
             axis.axhline(
                 self.current_target_joint_values[self.groups[group][i]] + tolerance,
@@ -724,7 +755,9 @@ class MJ_Controller(object):
             # cv.waitKey(delay=5000)
             # cv.destroyAllWindows()
 
-        return np.array(np.fliplr(np.flipud(rgb))), np.array(np.fliplr(np.flipud(depth)))
+        return np.array(np.fliplr(np.flipud(rgb))), np.array(
+            np.fliplr(np.flipud(depth))
+        )
 
     def depth_2_meters(self, depth):
         """
@@ -774,13 +807,17 @@ class MJ_Controller(object):
             self.create_camera_data(width, height, camera)
 
         # Homogeneous image point
-        hom_pixel = self.cam_matrix @ self.cam_rot_mat @ (world_coordinate - self.cam_pos)
+        hom_pixel = (
+            self.cam_matrix @ self.cam_rot_mat @ (world_coordinate - self.cam_pos)
+        )
         # Real image point
         pixel = hom_pixel[:2] / hom_pixel[2]
 
         return np.round(pixel[0]).astype(int), np.round(pixel[1]).astype(int)
 
-    def pixel_2_world(self, pixel_x, pixel_y, depth, width=200, height=200, camera="top_down"):
+    def pixel_2_world(
+        self, pixel_x, pixel_y, depth, width=200, height=200, camera="top_down"
+    ):
         """
         Converts pixel coordinates into world coordinates.
 
@@ -822,7 +859,10 @@ class MJ_Controller(object):
             color = [1, 0, 0]
         label_str = str(coordinates) if label else ""
         rgba = np.concatenate((color, np.ones(1)))
-        self.viewer.add_marker(pos=coordinates, label=label_str, size=size, rgba=rgba, type=2)
+        if self.viewer is not None:
+            self.viewer.add_marker(
+                pos=coordinates, label=label_str, size=size, rgba=rgba, type=2
+            )
 
     @property
     def last_steps(self):

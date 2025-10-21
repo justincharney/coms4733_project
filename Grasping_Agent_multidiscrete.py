@@ -24,11 +24,13 @@ WIDTH = 200
 N_EPISODES = 1000
 STEPS_PER_EPISODE = 50
 MEMORY_SIZE = 2000
-MAX_POSSIBLE_SAMPLES = (
-    12  # Number of transitions that fits on GPU memory for one backward-call (12 for RGB-D)
+MAX_POSSIBLE_SAMPLES = 12  # Number of transitions that fits on GPU memory for one backward-call (12 for RGB-D)
+NUMBER_ACCUMULATIONS_BEFORE_UPDATE = (
+    1  # How often to accumulate gradients before updating
 )
-NUMBER_ACCUMULATIONS_BEFORE_UPDATE = 1  # How often to accumulate gradients before updating
-BATCH_SIZE = MAX_POSSIBLE_SAMPLES * NUMBER_ACCUMULATIONS_BEFORE_UPDATE  # Effective batch size
+BATCH_SIZE = (
+    MAX_POSSIBLE_SAMPLES * NUMBER_ACCUMULATIONS_BEFORE_UPDATE
+)  # Effective batch size
 GAMMA = 0.0
 LEARNING_RATE = 0.001
 EPS_STEADY = 0.0
@@ -83,7 +85,10 @@ class Grasp_Agent:
         self.depth_only = depth_only
         if train:
             self.env = gym.make(
-                "gym_grasper:Grasper-v0", image_height=HEIGHT, image_width=WIDTH, render=False
+                "gym_grasper:Grasper-v0",
+                image_height=HEIGHT,
+                image_width=WIDTH,
+                render=False,
             )
             # self.env = gym.make('gym_grasper:Grasper-v0', image_height=HEIGHT, image_width=WIDTH)
         else:
@@ -101,10 +106,14 @@ class Grasp_Agent:
         )
         self.output = self.n_actions_1 * self.n_actions_2
         # Initialize networks
-        self.policy_net = MULTIDISCRETE_RESNET(number_actions_dim_2=self.n_actions_2).to(device)
+        self.policy_net = MULTIDISCRETE_RESNET(
+            number_actions_dim_2=self.n_actions_2
+        ).to(device)
         # Only need a target network if gamma is not zero
         if GAMMA != 0.0:
-            self.target_net = MULTIDISCRETE_RESNET(number_actions_dim_2=self.n_actions_2).to(device)
+            self.target_net = MULTIDISCRETE_RESNET(
+                number_actions_dim_2=self.n_actions_2
+            ).to(device)
             # No need for training on target net, we just copy the weigts from policy nets if we use it
             self.target_net.eval()
         # Load weights if training should not start from scratch
@@ -125,7 +134,9 @@ class Grasp_Agent:
         # self.normal_rgb = T.Compose([T.ToPILImage(), T.ColorJitter(brightness=0.5, contrast=0.5, saturation=0.5, hue=0.5), T.ToTensor(), \
         # T.Lambda(lambda x : x + 0.01*torch.randn_like(x))])
         self.normal_rgb_no_jitter_no_noise = T.Compose([T.ToTensor()])
-        self.normal_depth = T.Compose([T.Lambda(lambda x: x + 0.01 * torch.randn_like(x))])
+        self.normal_depth = T.Compose(
+            [T.Lambda(lambda x: x + 0.01 * torch.randn_like(x))]
+        )
         # self.normal_depth =T.Compose([T.Lambda(lambda x : x + 0.001*torch.randn_like(x))])
         self.depth_threshold = np.round(
             self.env.model.cam_pos0[self.env.model.camera_name2id("top_down")][2]
@@ -156,11 +167,17 @@ class Grasp_Agent:
                 )
             if load_path is not None:
                 self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-                self.steps_done = checkpoint["step"] if "step" in checkpoint.keys() else 0
-                self.eps_threshold = (
-                    checkpoint["epsilon"] if "epsilon" in checkpoint.keys() else EPS_STEADY
+                self.steps_done = (
+                    checkpoint["step"] if "step" in checkpoint.keys() else 0
                 )
-                self.DESCRIPTION = "_continue_" + load_path[:-11] + "_at_" + str(self.steps_done)
+                self.eps_threshold = (
+                    checkpoint["epsilon"]
+                    if "epsilon" in checkpoint.keys()
+                    else EPS_STEADY
+                )
+                self.DESCRIPTION = (
+                    "_continue_" + load_path[:-11] + "_at_" + str(self.steps_done)
+                )
                 self.WEIGHT_PATH = load_path
                 self.greedy_rotations = (
                     checkpoint["greedy_rotations"]
@@ -219,11 +236,13 @@ class Grasp_Agent:
             self.writer = SummaryWriter(comment=self.DESCRIPTION)
             if not self.depth_only:
                 self.writer.add_graph(
-                    self.policy_net, torch.zeros(1, 4, self.WIDTH, self.HEIGHT).to(device)
+                    self.policy_net,
+                    torch.zeros(1, 4, self.WIDTH, self.HEIGHT).to(device),
                 )
             else:
                 self.writer.add_graph(
-                    self.policy_net, torch.zeros(1, 1, self.WIDTH, self.HEIGHT).to(device)
+                    self.policy_net,
+                    torch.zeros(1, 1, self.WIDTH, self.HEIGHT).to(device),
                 )
             self.last_1000_rewards = deque(maxlen=1000)
             self.last_100_loss = deque(maxlen=100)
@@ -242,7 +261,9 @@ class Grasp_Agent:
             -1.0 * self.steps_done / EPS_DECAY
         )
         # self.eps_threshold = EPS_STEADY
-        self.writer.add_scalar("Epsilon", self.eps_threshold, global_step=self.steps_done)
+        self.writer.add_scalar(
+            "Epsilon", self.eps_threshold, global_step=self.steps_done
+        )
         self.steps_done += 1
         # if self.steps_done < 2*BATCH_SIZE:
         # self.last_action = 'random'
@@ -418,12 +439,16 @@ class Grasp_Agent:
             state_batch = torch.cat(batch.state[start_idx:end_idx]).to(device)
             action_batch = torch.cat(batch.action[start_idx:end_idx]).to(device)
             if GAMMA != 0.0:
-                next_state_batch = torch.cat(batch.next_state[start_idx:end_idx]).to(device)
+                next_state_batch = torch.cat(batch.next_state[start_idx:end_idx]).to(
+                    device
+                )
             reward_batch = torch.cat(batch.reward[start_idx:end_idx]).to(device)
 
             # Current Q prediction of our policy net, for the actions we took
             q_pred = (
-                self.policy_net(state_batch).view(MAX_POSSIBLE_SAMPLES, -1).gather(1, action_batch)
+                self.policy_net(state_batch)
+                .view(MAX_POSSIBLE_SAMPLES, -1)
+                .gather(1, action_batch)
             )
             # q_pred = self.policy_net(state_batch).gather(1, action_batch)
 
@@ -431,12 +456,17 @@ class Grasp_Agent:
                 q_expected = reward_batch.float()
             else:
                 # Q prediction of the target net of the next state
-                q_next_state = self.target_net(next_state_batch).max(1)[0].unsqueeze(1).detach()
+                q_next_state = (
+                    self.target_net(next_state_batch).max(1)[0].unsqueeze(1).detach()
+                )
 
                 # Calulate expected Q value using Bellmann: Q_t = r + gamma*Q_t+1
                 q_expected = reward_batch + (GAMMA * q_next_state)
 
-            loss = F.binary_cross_entropy(q_pred, q_expected) / NUMBER_ACCUMULATIONS_BEFORE_UPDATE
+            loss = (
+                F.binary_cross_entropy(q_pred, q_expected)
+                / NUMBER_ACCUMULATIONS_BEFORE_UPDATE
+            )
             loss.backward()
 
         self.last_100_loss.append(loss.item())
@@ -474,7 +504,9 @@ class Grasp_Agent:
 
         if self.steps_done % 10 == 0:
             self.writer.add_scalars(
-                "Total number of rotation actions/Greedy", self.greedy_rotations, self.steps_done
+                "Total number of rotation actions/Greedy",
+                self.greedy_rotations,
+                self.steps_done,
             )
             self.writer.add_scalars(
                 "Total number of successful rotation actions/Greedy",
@@ -502,23 +534,28 @@ class Grasp_Agent:
             if self.steps_done % 10 == 0:
                 mean_reward_1000 = np.mean(self.last_1000_rewards)
                 self.writer.add_scalar(
-                    "Mean reward/Last1000", mean_reward_1000, global_step=self.steps_done
+                    "Mean reward/Last1000",
+                    mean_reward_1000,
+                    global_step=self.steps_done,
                 )
 
         if len(self.last_100_loss) > 99:
             if self.steps_done % 10 == 0:
                 self.writer.add_scalar(
-                    "Mean loss/Last100", np.mean(self.last_100_loss), global_step=self.steps_done
+                    "Mean loss/Last100",
+                    np.mean(self.last_100_loss),
+                    global_step=self.steps_done,
                 )
 
 
 def main():
-
     for rand_seed in [999]:
         for lr in [0.0005]:
             LOAD_PATH = "DQN_RESNET_LR_0.001_OPTIM_ADAM_H_200_W_200_STEPS_35000_BUFFER_SIZE_2000_BATCH_SIZE_12_SEED_81_9_7_2020_9_52_weights.pt"
 
-            agent = Grasp_Agent(seed=rand_seed, load_path=None, learning_rate=lr, depth_only=False)
+            agent = Grasp_Agent(
+                seed=rand_seed, load_path=None, learning_rate=lr, depth_only=False
+            )
             agent.optimizer.zero_grad()
             for episode in range(1, N_EPISODES + 1):
                 state = agent.env.reset()
@@ -531,7 +568,9 @@ def main():
                     )
                 )
                 for step in range(1, STEPS_PER_EPISODE + 1):
-                    print("#################################################################")
+                    print(
+                        "#################################################################"
+                    )
                     print(
                         colored(
                             "EPISODE {} STEP {}".format(episode, step),
@@ -539,7 +578,9 @@ def main():
                             attrs=["bold"],
                         )
                     )
-                    print("#################################################################")
+                    print(
+                        "#################################################################"
+                    )
                     action = agent.epsilon_greedy(state)
                     env_action = agent.transform_action(action)
                     next_state, reward, done, _ = agent.env.step(

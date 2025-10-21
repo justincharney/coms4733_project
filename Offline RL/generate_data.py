@@ -12,7 +12,6 @@ SAVE_WEIGHTS = True
 
 
 def main():
-
     for rand_seed in [122]:
         for lr in [0.001]:
             LOAD_PATH = "../DQN_RESNET_LR_0.001_OPTIM_ADAM_H_200_W_200_STEPS_35000_BUFFER_SIZE_2000_BATCH_SIZE_12_SEED_81_9_7_2020_9_52_weights.pt"
@@ -52,7 +51,9 @@ def main():
                     )
                 )
                 for step in range(1, 51):
-                    print("#################################################################")
+                    print(
+                        "#################################################################"
+                    )
                     print(
                         colored(
                             "EPISODE {} STEP {}".format(episode, step),
@@ -60,7 +61,9 @@ def main():
                             attrs=["bold"],
                         )
                     )
-                    print("#################################################################")
+                    print(
+                        "#################################################################"
+                    )
                     action = agent.epsilon_greedy(state)
                     if not actions_full:
                         actions.append(action.item())

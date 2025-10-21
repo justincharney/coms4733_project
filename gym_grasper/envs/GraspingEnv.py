@@ -48,7 +48,9 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         if render:
             # render once to initialize a viewer object
             self.render()
-        self.controller = MJ_Controller(self.model, self.sim, self.viewer)
+        self.controller = MJ_Controller(
+            self.model, self.sim, self.viewer if render else False
+        )
         self.initialized = True
         self.grasp_counter = 0
         self.show_observations = show_obs
@@ -80,8 +82,12 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         if not self.initialized:
             # self.current_observation = np.zeros((200,200,4))
             self.current_observation = defaultdict()
-            self.current_observation["rgb"] = np.zeros((self.IMAGE_WIDTH, self.IMAGE_HEIGHT, 3))
-            self.current_observation["depth"] = np.zeros((self.IMAGE_WIDTH, self.IMAGE_HEIGHT))
+            self.current_observation["rgb"] = np.zeros(
+                (self.IMAGE_WIDTH, self.IMAGE_HEIGHT, 3)
+            )
+            self.current_observation["depth"] = np.zeros(
+                (self.IMAGE_WIDTH, self.IMAGE_HEIGHT)
+            )
             reward = 0
         else:
             if self.step_called == 1:
@@ -100,7 +106,11 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             depth = self.current_observation["depth"][y][x]
 
             coordinates = self.controller.pixel_2_world(
-                pixel_x=x, pixel_y=y, depth=depth, height=self.IMAGE_HEIGHT, width=self.IMAGE_WIDTH
+                pixel_x=x,
+                pixel_y=y,
+                depth=depth,
+                height=self.IMAGE_HEIGHT,
+                width=self.IMAGE_WIDTH,
             )
 
             print(
@@ -124,7 +134,9 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             if coordinates[2] < 0.8 or coordinates[1] > -0.3:
                 print(
                     colored(
-                        "Skipping execution due to bad depth value!", color="red", attrs=["bold"]
+                        "Skipping execution due to bad depth value!",
+                        color="red",
+                        attrs=["bold"],
                     )
                 )
                 # Binary reward
@@ -198,14 +210,20 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
     def transform_height(self, height_action, depth_height):
         return np.round(
-            self.TABLE_HEIGHT + height_action * (0.1) / self.action_space.nvec[1], decimals=3
+            self.TABLE_HEIGHT + height_action * (0.1) / self.action_space.nvec[1],
+            decimals=3,
         )
         # return np.round(max(self.TABLE_HEIGHT, self.TABLE_HEIGHT + height_action * (depth_height - self.TABLE_HEIGHT)/self.action_space.nvec[1]), decimals=3)
 
     def move_and_grasp(
-        self, coordinates, rotation, render=False, record_grasps=False, markers=False, plot=False
+        self,
+        coordinates,
+        rotation,
+        render=False,
+        record_grasps=False,
+        markers=False,
+        plot=False,
     ):
-
         # Try to move directly above target
         coordinates_1 = copy.deepcopy(coordinates)
         coordinates_1[2] = 1.1
@@ -252,7 +270,9 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             result_rotate = self.rotate_wrist_3_joint_to_value(self.rotations[rotation])
             steps_rotate = self.controller.last_steps
 
-            self.controller.open_gripper(half=True, render=render, quiet=True, plot=plot)
+            self.controller.open_gripper(
+                half=True, render=render, quiet=True, plot=plot
+            )
 
             # Move to grasping height
             coordinates_2 = copy.deepcopy(coordinates)
@@ -352,8 +372,16 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
         # else:
         print("Results: ")
-        print("Move to pre grasp position: ".ljust(40, " "), result_pre, ",", steps1, "steps")
-        print("Rotate gripper: ".ljust(40, " "), result_rotate, ",", steps_rotate, "steps")
+        print(
+            "Move to pre grasp position: ".ljust(40, " "),
+            result_pre,
+            ",",
+            steps1,
+            "steps",
+        )
+        print(
+            "Rotate gripper: ".ljust(40, " "), result_rotate, ",", steps_rotate, "steps"
+        )
         print(
             f"Move to grasping position (z={np.round(coordinates_2[2], decimals=4) if isinstance(coordinates_2, np.ndarray) else 0}):".ljust(
                 40, " "
@@ -370,11 +398,19 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         print("Open gripper: ".ljust(40, " "), result_open, ",", steps_open, "steps")
 
         if result1 == result2 == result3 == result4 == result_open == "success":
-            print(colored("Executed all movements successfully.", color="green", attrs=["bold"]))
+            print(
+                colored(
+                    "Executed all movements successfully.",
+                    color="green",
+                    attrs=["bold"],
+                )
+            )
         else:
             print(
                 colored(
-                    "Could not execute all movements successfully.", color="red", attrs=["bold"]
+                    "Could not execute all movements successfully.",
+                    color="red",
+                    attrs=["bold"],
                 )
             )
 
@@ -415,7 +451,15 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         qpos = self.data.qpos
         qvel = self.data.qvel
 
-        qpos[self.controller.actuated_joint_ids] = [0, -1.57, 1.57, -1.57, -1.57, 0.0, 0.3]
+        qpos[self.controller.actuated_joint_ids] = [
+            0,
+            -1.57,
+            1.57,
+            -1.57,
+            -1.57,
+            0.0,
+            0.3,
+        ]
 
         n_objects = 40
 

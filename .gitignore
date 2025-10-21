@@ -16,3 +16,5 @@ UR5gripper_2_finger_test.xml
 UR5gripper_2_finger_old.xml
 Offline RL/Data/
 # decorators.py
+venv/
+AGENTS.md

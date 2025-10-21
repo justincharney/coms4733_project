@@ -62,7 +62,17 @@ filename = "mean_and_std"
 
 with open(filename, "wb") as file:
     pickle.dump(
-        [mean_red, mean_green, mean_blue, mean_depth, std_red, std_green, std_blue, std_depth], file
+        [
+            mean_red,
+            mean_green,
+            mean_blue,
+            mean_depth,
+            std_red,
+            std_green,
+            std_blue,
+            std_depth,
+        ],
+        file,
     )
 
 print("\nWrote values to file {}.".format(filename))

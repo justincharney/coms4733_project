@@ -1,9 +1,10 @@
 mujoco_py
-numpy
+numpy<2.0
 simple_pid
 termcolor
 ikpy
 pyquaternion
 opencv-python
 matplotlib
-gym
+gym==0.21.0
+Cython<3.0
