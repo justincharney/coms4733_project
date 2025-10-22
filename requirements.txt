@@ -1,8 +1,8 @@
 mujoco_py
-numpy<2.0
+numpy==1.23.5
 simple_pid
 termcolor
-ikpy
+ikpy==3.1
 pyquaternion
 opencv-python-headless>=4.5.0,<4.10.0
 matplotlib

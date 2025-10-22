@@ -61,6 +61,18 @@ class MJ_Controller(object):
             path + "/UR5+gripper/ur5_gripper.urdf",
             active_links_mask=[False, True, True, True, True, True, True, False],
         )
+        # Order of joints expected by the IK chain (excluding fixed base/ee links).
+        self._ik_joint_names = [
+            "shoulder_pan_joint",
+            "shoulder_lift_joint",
+            "elbow_joint",
+            "wrist_1_joint",
+            "wrist_2_joint",
+            "wrist_3_joint",
+        ]
+        self._ik_joint_limits = [
+            self.ee_chain.links[i].bounds for i in range(1, 1 + len(self._ik_joint_names))
+        ]
         self.cam_matrix = None
         self.cam_init = False
         self.last_movement_steps = 0
@@ -528,10 +540,24 @@ class MJ_Controller(object):
             gripper_center_position = ee_position_base + [0, -0.005, 0.16]
             # gripper_center_position = ee_position_base + [0, 0, 0.185]
 
-            # initial_position=[0, *self.sim.data.qpos[self.actuated_joint_ids][self.groups['Arm']], 0]
-            # joint_angles = self.ee_chain.inverse_kinematics(gripper_center_position, [0,0,-1], orientation_mode='X', initial_position=initial_position, regularization_parameter=0.05)
+            # Use the current joint configuration as the IK seed to satisfy joint limits.
+            initial_position = [0.0]
+            for idx, joint_name in enumerate(self._ik_joint_names):
+                qpos = self.sim.data.get_joint_qpos(joint_name)
+                # get_joint_qpos returns a numpy array for hinge joints
+                current_value = float(np.atleast_1d(qpos)[0])
+                lower, upper = self._ik_joint_limits[idx]
+                if not np.isinf(lower) and not np.isinf(upper):
+                    eps = 1e-6
+                    current_value = np.clip(current_value, lower + eps, upper - eps)
+                initial_position.append(current_value)
+            initial_position.append(0.0)
+
             joint_angles = self.ee_chain.inverse_kinematics(
-                gripper_center_position, [0, 0, -1], orientation_mode="X"
+                gripper_center_position,
+                [0, 0, -1],
+                orientation_mode="X",
+                initial_position=initial_position,
             )
 
             prediction = (
