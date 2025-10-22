@@ -1,4 +1,7 @@
 # Author: Paul Daniel (pdd@mp.aau.dk)
+import os
+
+os.environ["MUJOCO_GL"] = "osmesa"
 
 import gym
 import torch
@@ -88,6 +91,7 @@ class Grasp_Agent:
                 "gym_grasper:Grasper-v0",
                 image_height=HEIGHT,
                 image_width=WIDTH,
+                show_obs=False,
                 render=False,
             )
             # self.env = gym.make('gym_grasper:Grasper-v0', image_height=HEIGHT, image_width=WIDTH)
@@ -583,7 +587,7 @@ def main():
                     )
                     action = agent.epsilon_greedy(state)
                     env_action = agent.transform_action(action)
-                    next_state, reward, done, _ = agent.env.step(
+                    next_state, reward, done, _ = agent.env.unwrapped.step(
                         env_action, action_info=agent.last_action
                     )
                     agent.update_tensorboard(reward, env_action)

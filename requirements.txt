@@ -4,7 +4,11 @@ simple_pid
 termcolor
 ikpy
 pyquaternion
-opencv-python
+opencv-python-headless>=4.5.0,<4.10.0
 matplotlib
 gym==0.21.0
 Cython<3.0
+torch
+torchvision
+tensorboard
+prettytable

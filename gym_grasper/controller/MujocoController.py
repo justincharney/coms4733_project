@@ -56,7 +56,11 @@ class MJ_Controller(object):
         self.render_every_n_steps = (
             5  # Only render every N steps to prevent xvfb segfaults
         )
-        self.ee_chain = Chain.from_urdf_file(path + "/UR5+gripper/ur5_gripper.urdf")
+        # Ignore the fixed base and end-effector joints when building the IK chain.
+        self.ee_chain = Chain.from_urdf_file(
+            path + "/UR5+gripper/ur5_gripper.urdf",
+            active_links_mask=[False, True, True, True, True, True, True, False],
+        )
         self.cam_matrix = None
         self.cam_init = False
         self.last_movement_steps = 0

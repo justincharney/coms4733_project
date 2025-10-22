@@ -523,7 +523,11 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
     def close(self):
         mujoco_env.MujocoEnv.close(self)
-        cv.destroyAllWindows()
+        try:
+            cv.destroyAllWindows()
+        except cv.error:
+            # Headless mode - destroyAllWindows not available
+            pass
 
     def print_info(self):
         print("Model timestep:", self.model.opt.timestep)
