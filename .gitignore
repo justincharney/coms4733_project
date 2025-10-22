@@ -19,3 +19,5 @@ Offline RL/Data/
 venv/
 AGENTS.md
 observations
+logs
+renders
