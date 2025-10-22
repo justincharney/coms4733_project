@@ -462,10 +462,12 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             0.3,
         ]
 
-        n_objects = 40
+        object_joint_names = sorted(
+            (name for name in self.model.joint_names if name.startswith("free_joint_")),
+            key=lambda name: int(name.split("_")[-1]),
+        )
 
-        for i in range(n_objects):
-            joint_name = f"free_joint_{i}"
+        for joint_name in object_joint_names:
             q_adr = self.model.get_joint_qpos_addr(joint_name)
             start, end = q_adr
             qpos[start] = np.random.uniform(low=-0.25, high=0.25)
