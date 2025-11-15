@@ -1,0 +1,175 @@
+================================================================================
+macOS Setup Guide for COMS4733 Project (MuJoCo Robotics Environment)
+================================================================================
+
+This guide documents all steps required to set up and run this project on macOS.
+
+PREREQUISITES
+--------------------------------------------------------------------------------
+
+1. Check if Homebrew is installed:
+   $ which brew
+   $ brew --version
+   
+   If not installed, install Homebrew from https://brew.sh
+
+2. Install Xcode Command Line Tools (required for compilation):
+   $ xcode-select --install
+   
+   Verify installation:
+   $ xcode-select -p
+   Should output: /Library/Developer/CommandLineTools
+
+
+MUJOCO INSTALLATION
+--------------------------------------------------------------------------------
+
+1. Download and install MuJoCo from: https://www.roboti.us/index.html
+   - Download MuJoCo 2.1.0
+   - Extract to ~/.mujoco/mujoco210/
+
+2. Set up a license and activate it at: https://www.roboti.us/license.html
+   - Place your license key file (mjkey.txt) in ~/.mujoco/
+
+
+PYTHON ENVIRONMENT SETUP
+--------------------------------------------------------------------------------
+
+1. Create a conda environment (recommended):
+   $ conda create -n robotix python=3.9
+   $ conda activate robotix
+
+2. Install pip dependencies:
+   $ pip install -r requirements.txt
+   
+   Note: This will install mujoco_py, which requires compilation. The first
+   installation may take several minutes.
+
+
+FIXING MUJOCO_PY COMPILATION ISSUES ON macOS
+--------------------------------------------------------------------------------
+
+mujoco_py requires GCC 9.x to compile its Cython extensions on macOS.
+
+1. Install GCC 9 using Homebrew:
+   $ brew install gcc@9
+   
+   This installation can take 10-30 minutes as it compiles GCC from source.
+
+2. Set environment variables for compilation:
+   
+   The system headers need to be accessible during compilation. Set these
+   environment variables before running Python scripts:
+   
+   $ export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX11.0.sdk
+   $ export CPPFLAGS="-I$SDKROOT/usr/include"
+   $ export CFLAGS="-I$SDKROOT/usr/include"
+   
+   To find your SDK path:
+   $ xcrun --show-sdk-path
+   
+   Note: You may need to adjust the SDK version based on your macOS version.
+   Available SDKs can be found at:
+   /Library/Developer/CommandLineTools/SDKs/
+
+
+FIXING macOS GATEKEEPER SECURITY ISSUES
+--------------------------------------------------------------------------------
+
+macOS may block the MuJoCo library due to security restrictions.
+
+1. Remove quarantine attribute from MuJoCo libraries:
+   $ xattr -d com.apple.quarantine ~/.mujoco/mujoco210/bin/libmujoco210.dylib
+   
+   Or remove from all .dylib files:
+   $ find ~/.mujoco/mujoco210 -name "*.dylib" -exec xattr -d com.apple.quarantine {} \;
+
+2. If you still get security warnings:
+   - Go to System Preferences → Security & Privacy → General
+   - Click "Allow Anyway" when prompted
+   
+   OR temporarily disable Gatekeeper (not recommended for production):
+   $ sudo spctl --master-disable
+   (Re-enable later with: sudo spctl --master-enable)
+
+
+RUNNING THE PROJECT
+--------------------------------------------------------------------------------
+
+1. Activate your conda environment:
+   $ conda activate robotix
+
+2. Set environment variables (if not already set in your shell profile):
+   $ export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX11.0.sdk
+   $ export CPPFLAGS="-I$SDKROOT/usr/include"
+   $ export CFLAGS="-I$SDKROOT/usr/include"
+   $ export MUJOCO_GL=osmesa
+
+3. Run the example agent:
+   $ python example_agent.py
+
+   Note: The first run will compile mujoco_py extensions, which may take
+   several minutes. Subsequent runs will be faster.
+
+
+TROUBLESHOOTING
+--------------------------------------------------------------------------------
+
+1. "Could not find supported GCC executable"
+   - Make sure gcc@9 is installed: brew list gcc@9
+   - Verify gcc-9 is in PATH: which gcc-9
+   - Should output: /usr/local/bin/gcc-9
+
+2. "limits.h: No such file or directory" or similar header errors
+   - Make sure SDKROOT, CPPFLAGS, and CFLAGS are set correctly
+   - Verify the SDK path exists: ls $SDKROOT
+
+3. "libmujoco210.dylib cannot be opened"
+   - Remove quarantine attribute (see Gatekeeper section above)
+   - Or allow in System Preferences → Security & Privacy
+
+4. Import errors for mujoco_py
+   - First import will trigger compilation - this is normal
+   - Make sure GCC 9 and environment variables are set before importing
+   - Check that MuJoCo is installed in ~/.mujoco/mujoco210/
+
+5. Conda environment issues
+   - Make sure you're using Python 3.9 (mujoco_py compatibility)
+   - Try: conda install python=3.9
+
+
+QUICK REFERENCE CHECKLIST
+--------------------------------------------------------------------------------
+
+[ ] Homebrew installed
+[ ] Xcode Command Line Tools installed
+[ ] MuJoCo 2.1.0 downloaded and extracted to ~/.mujoco/mujoco210/
+[ ] MuJoCo license key placed in ~/.mujoco/
+[ ] Conda environment created (python=3.9)
+[ ] Dependencies installed (pip install -r requirements.txt)
+[ ] GCC 9 installed (brew install gcc@9)
+[ ] Environment variables set (SDKROOT, CPPFLAGS, CFLAGS)
+[ ] Quarantine removed from MuJoCo libraries
+[ ] Gym environment installed (pip install -e .) [OPTIONAL]
+[ ] example_agent.py runs successfully
+
+
+NOTES
+--------------------------------------------------------------------------------
+
+- This project uses mujoco_py, which is the older Python bindings for MuJoCo.
+  The newer mujoco package (without _py) is not compatible with this codebase.
+
+- The first compilation of mujoco_py can take 10-30 minutes depending on
+  your system. Be patient!
+
+- If you're using an Apple Silicon Mac (M1/M2), you may encounter additional
+  compatibility issues. This guide was tested on Intel-based macOS.
+
+- For rendering, the project uses OSMesa (software rendering) by default.
+  This is set via MUJOCO_GL=osmesa environment variable.
+
+================================================================================
+End of Setup Guide
+================================================================================
+
