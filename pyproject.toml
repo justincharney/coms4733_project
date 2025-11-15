@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# Enable specific rules or disable them as needed
+
+[tool.black]
+line-length = 120
+
+[tool.pylint.messages_control]
+max-line-length = 120
+
+[tool.pylint.format]
+max-line-length = 120
+
