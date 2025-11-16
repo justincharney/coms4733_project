@@ -33,11 +33,17 @@ class EpisodeTransition:
 class HERReplayBuffer:
     """Stores full episodes and supports future-goal relabelling."""
 
-    def __init__(self, capacity, her_ratio=0.8):
+    def __init__(self, capacity, her_ratio=0.8, goal_mean=None, goal_std=None):
         self.capacity = capacity
         self.her_ratio = her_ratio
         self.episodes = deque()
         self.num_transitions = 0
+        self.goal_mean = (
+            np.array(goal_mean, dtype=np.float32) if goal_mean is not None else None
+        )
+        self.goal_std = (
+            np.array(goal_std, dtype=np.float32) if goal_std is not None else None
+        )
 
     def __len__(self):
         return self.num_transitions
@@ -112,7 +118,11 @@ class HERReplayBuffer:
         )
 
     def _relabeled_transition(self, transition, desired_goal, env):
-        goal_tensor = torch.tensor(desired_goal, dtype=torch.float32).view(1, -1)
+        if self.goal_mean is not None and self.goal_std is not None:
+            normalized_goal = (desired_goal - self.goal_mean) / self.goal_std
+        else:
+            normalized_goal = desired_goal
+        goal_tensor = torch.tensor(normalized_goal, dtype=torch.float32).view(1, -1)
         obs = AgentObservation(
             state=transition.obs.state.clone(),
             desired_goal=goal_tensor.clone(),
@@ -223,6 +233,9 @@ class SAC_Agent:
         self.output = self.n_actions_1 * self.n_actions_2
         desired_goal = np.array(self.env.desired_goal)
         self.goal_dim = desired_goal.size if desired_goal.shape else 0
+        self.goal_mean_np = np.array(self.env.goal_center, dtype=np.float32)
+        self.goal_std_np = np.array(self.env.goal_noise, dtype=np.float32)
+        self.goal_std_np[self.goal_std_np == 0.0] = 0.01
 
         # Automatic alpha tuning (after n_actions is defined)
         if auto_alpha:
@@ -278,7 +291,12 @@ class SAC_Agent:
 
         if train:
             # Set up HER replay buffer and per-episode storage
-            self.memory = HERReplayBuffer(self.memory_size, her_ratio=self.her_ratio)
+            self.memory = HERReplayBuffer(
+                self.memory_size,
+                her_ratio=self.her_ratio,
+                goal_mean=self.goal_mean_np,
+                goal_std=self.goal_std_np,
+            )
             self.current_episode = []
 
             # Optimizers
@@ -492,11 +510,13 @@ class SAC_Agent:
         desired_goal = observation.get("desired_goal")
         if desired_goal is None:
             desired_goal = getattr(self.env, "desired_goal", np.zeros(self.goal_dim))
+        desired_goal = self._normalize_goal(desired_goal)
         desired_goal_tensor = torch.tensor(desired_goal, dtype=torch.float32).view(1, -1)
 
         achieved_goal = observation.get("achieved_goal")
         if achieved_goal is None:
             achieved_goal = np.zeros(self.goal_dim)
+        achieved_goal = self._normalize_goal(achieved_goal)
         achieved_goal_tensor = torch.tensor(achieved_goal, dtype=torch.float32).view(1, -1)
 
         return AgentObservation(
@@ -518,6 +538,12 @@ class SAC_Agent:
         action_1 = action_value % self.n_actions_1
         action_2 = action_value // self.n_actions_1
         return np.array([action_1, action_2])
+
+    def _normalize_goal(self, goal):
+        goal = np.asarray(goal, dtype=np.float32)
+        if goal.size == 0:
+            return goal
+        return (goal - self.goal_mean_np) / self.goal_std_np
 
     def start_new_episode(self):
         if hasattr(self, "current_episode"):
