@@ -44,6 +44,8 @@ class SAC_Agent:
         load_path=None,
         train=True,
         auto_alpha=True,
+        use_her=False,
+        her_kwargs=None,
     ):
         """
         Args:
@@ -66,6 +68,8 @@ class SAC_Agent:
         random.seed(seed)
         self.depth_only = depth_only
         self.auto_alpha = auto_alpha
+        self.use_her = use_her
+        self.her_kwargs = her_kwargs or {}
         self.height = 200
         self.width = 200
         self.memory_size = 2000
@@ -164,22 +168,28 @@ class SAC_Agent:
         self.last_action = None
 
         if train:
-            # Set up replay buffer
-            self.memory = ReplayBuffer(self.memory_size, simple=False)
+            if self.use_her:
+                # Use HER-enabled replay buffer
+                # TODO: Add the HER-enabled replay buffer here
+                print("Using HERReplayBuffer (SAC + HER).")
+            else:
+                # Use standard replay buffer
+                self.memory = ReplayBuffer(self.memory_size, simple=False)
+                print("Using standard ReplayBuffer (SAC only).")
 
-            # Override push to handle done flag
-            def push_with_done(memory_self, state, action, next_state, reward, done):
-                # Store transition with done flag
-                if len(memory_self.memory) < memory_self.size:
-                    memory_self.memory.append(None)
-                memory_self.memory[memory_self.position] = Transition(
-                    state, action, next_state, reward, done
-                )
-                memory_self.position = (memory_self.position + 1) % memory_self.size
+                # Override push to handle done flag for the standard buffer
+                def push_with_done(memory_self, state, action, next_state, reward, done):
+                    # Store transition with done flag
+                    if len(memory_self.memory) < memory_self.size:
+                        memory_self.memory.append(None)
+                    memory_self.memory[memory_self.position] = Transition(
+                        state, action, next_state, reward, done
+                    )
+                    memory_self.position = (memory_self.position + 1) % memory_self.size
 
-            # Bind the method to the memory object
-            import types
-            self.memory.push = types.MethodType(push_with_done, self.memory)
+                # Bind the method to the memory object
+                import types
+                self.memory.push = types.MethodType(push_with_done, self.memory)
 
             # Optimizers
             if self.optimizer == "SGD":
