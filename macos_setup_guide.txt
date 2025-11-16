@@ -24,194 +24,114 @@ PREREQUISITES
 MUJOCO INSTALLATION
 --------------------------------------------------------------------------------
 
-1. Download and install MuJoCo from: https://www.roboti.us/index.html
-   - Download MuJoCo 2.1.0
-   - Extract to ~/.mujoco/mujoco210/
-
-2. Set up a license and activate it at: https://www.roboti.us/license.html
-   - Place your license key file (mjkey.txt) in ~/.mujoco/
+No manual install is required—the open-source MuJoCo runtime ships with the
+`mujoco` PyPI package that gets installed via `pip install -r requirements.txt`.
 
 
 PYTHON ENVIRONMENT SETUP
 --------------------------------------------------------------------------------
 
-1. Create a conda environment (recommended):
-   $ conda create -n robotix python=3.9
-   $ conda activate robotix
+1. Create a virtual or conda environment (recommended):
+   $ python -m venv .venv && source .venv/bin/activate
+   # or: conda create -n robotix python=3.10 && conda activate robotix
 
-2. Install pip dependencies:
+2. Install pip dependencies (this pulls in the official mujoco wheels):
    $ pip install -r requirements.txt
 
-   Note: This will install mujoco_py, which requires compilation. The first
-   installation may take several minutes.
-
-
-FIXING MUJOCO_PY COMPILATION ISSUES ON macOS
---------------------------------------------------------------------------------
-
-mujoco_py requires GCC 9.x to compile its Cython extensions on macOS.
-
-1. Install GCC 9 using Homebrew:
-   $ brew install gcc@9
-
-   This installation can take 10-30 minutes as it compiles GCC from source.
-
-2. Set environment variables for compilation:
-
-   The system headers need to be accessible during compilation. Set these
-   environment variables before running Python scripts:
-
-   $ export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX11.0.sdk
-   $ export CPPFLAGS="-I$SDKROOT/usr/include"
-   $ export CFLAGS="-I$SDKROOT/usr/include"
-
-   To find your SDK path:
-   $ xcrun --show-sdk-path
-
-   Note: You may need to adjust the SDK version based on your macOS version.
-   Available SDKs can be found at:
-   /Library/Developer/CommandLineTools/SDKs/
-
-
-FIXING macOS GATEKEEPER SECURITY ISSUES
---------------------------------------------------------------------------------
-
-macOS may block the MuJoCo library due to security restrictions.
-
-1. Remove quarantine attribute from MuJoCo libraries:
-   $ xattr -d com.apple.quarantine ~/.mujoco/mujoco210/bin/libmujoco210.dylib
-
-   Or remove from all .dylib files:
-   $ find ~/.mujoco/mujoco210 -name "*.dylib" -exec xattr -d com.apple.quarantine {} \;
-
-2. If you still get security warnings:
-   - Go to System Preferences → Security & Privacy → General
-   - Click "Allow Anyway" when prompted
-
-   OR temporarily disable Gatekeeper (not recommended for production):
-   $ sudo spctl --master-disable
-   (Re-enable later with: sudo spctl --master-enable)
+   The `mujoco` PyPI package bundles the MuJoCo runtime, so no separate license or
+   compiler toolchain is required.
 
 
 RUNNING THE PROJECT
---------------------------------------------------------------------------------
 
 1. Activate your conda environment:
    $ conda activate robotix
 
-2. Set environment variables (if not already set in your shell profile):
-   $ export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX11.0.sdk
-   $ export CPPFLAGS="-I$SDKROOT/usr/include"
-   $ export CFLAGS="-I$SDKROOT/usr/include"
-   $ export MUJOCO_GL=osmesa
-
-3. Run the example agent:
+2. Run the example agent:
    $ python example_agent.py
 
-   Note: The first run will compile mujoco_py extensions, which may take
-   several minutes. Subsequent runs will be faster.
+   Note: The first run will warm up JIT caches (IK chains, rendered textures),
+   so expect a short delay. Subsequent runs will be faster.
 
 
 TROUBLESHOOTING
 --------------------------------------------------------------------------------
 
-1. "Could not find supported GCC executable"
-   - Make sure gcc@9 is installed: brew list gcc@9
-   - Verify gcc-9 is in PATH: which gcc-9
-   - Should output: /usr/local/bin/gcc-9
+1. `ModuleNotFoundError: No module named 'mujoco'`
+   - Ensure the virtual environment you activated is the one where you ran
+     `pip install -r requirements.txt`.
+   - Reinstall the package explicitly: `pip install --force-reinstall mujoco`.
 
-2. "limits.h: No such file or directory" or similar header errors
-   - Make sure SDKROOT, CPPFLAGS, and CFLAGS are set correctly
-   - Verify the SDK path exists: ls $SDKROOT
+2. "Failed loading EGL" or other GL driver errors
+   - Install/upgrade the optional GL dependencies: `brew install glfw glew`
+     (or rerun the provided Docker image which already includes Mesa/OSMesa).
 
-3. "libmujoco210.dylib cannot be opened"
-   - Remove quarantine attribute (see Gatekeeper section above)
-   - Or allow in System Preferences → Security & Privacy
+3. "Illegal instruction" when running inside Docker on Apple Silicon
+   - Make sure you're no longer forcing `--platform linux/amd64` unless you
+     truly need x86 emulation. The native arm64 wheels avoid this issue.
 
-4. Import errors for mujoco_py
-   - First import will trigger compilation - this is normal
-   - Make sure GCC 9 and environment variables are set before importing
-   - Check that MuJoCo is installed in ~/.mujoco/mujoco210/
-
-5. Conda environment issues
-   - Make sure you're using Python 3.9 (mujoco_py compatibility)
-   - Try: conda install python=3.9
+4. Conda/venv Python mismatch
+   - The project is tested with Python 3.9–3.11. Ensure your interpreter is in
+     that range: `python --version`.
+   - When using Conda, run `conda deactivate` and `conda activate robotix` to
+     confirm the correct environment is active before launching scripts.
 
 
 QUICK REFERENCE CHECKLIST
 --------------------------------------------------------------------------------
 
-[ ] Homebrew installed
+[ ] Homebrew installed (for optional CLI tools)
 [ ] Xcode Command Line Tools installed
-[ ] MuJoCo 2.1.0 downloaded and extracted to ~/.mujoco/mujoco210/
-[ ] MuJoCo license key placed in ~/.mujoco/
-[ ] Conda environment created (python=3.9)
-[ ] Dependencies installed (pip install -r requirements.txt)
-[ ] GCC 9 installed (brew install gcc@9)
-[ ] Environment variables set (SDKROOT, CPPFLAGS, CFLAGS)
-[ ] Quarantine removed from MuJoCo libraries
-[ ] Gym environment installed (pip install -e .) [OPTIONAL]
-[ ] example_agent.py runs successfully
+[ ] Python 3.9–3.11 environment created/activated
+[ ] `pip install -r requirements.txt` completed without errors
+[ ] `python example_agent.py` runs successfully
 
 
-APPLE SILICON VIA DOCKER (RECOMMENDED WORKAROUND)
+OPTIONAL DOCKER WORKFLOW
 --------------------------------------------------------------------------------
 
-If you're on an Apple Silicon (M1/M2/M3) machine, Homebrew can no longer install
-GCC 9, and mujoco_py's build chain only supports the x86_64 version of MuJoCo. You can run the entire project
-inside a Linux Docker container and avoid installing GCC on macOS altogether.
+Apple Silicon is supported natively via the `mujoco` wheels, so Docker is no
+longer required. You can still use the Dockerfile if you need a reproducible
+Linux userspace:
 
-1. Install Docker Desktop for macOS and enable "Use Rosetta for x86/amd64
-   emulation" in Settings > Features if prompted.
+1. Install Docker Desktop for macOS. Enable Rosetta emulation if you want an
+   `linux/amd64` image.
 
-2. From the repo root, build the image targeting linux/amd64:
+2. Build the container:
 
-   $ docker buildx build --platform linux/amd64 -t coms4733-rl .
+   $ docker buildx build --platform linux/amd64 -t coms4733-rl-arm .
 
-   (Re-run this command whenever requirements.txt changes.)
+3. Launch it with the repo mounted:
 
-3. Provide your MuJoCo license key. The Docker image creates an empty
-   /root/.mujoco/mjkey.txt so mujoco_py can compile, but you should mount your
-   actual key at runtime:
+   $ docker run --platform linux/arm64 --rm -it \
+      -e MUJOCO_GL=egl \
+      -v "$(pwd)":/workspace \
+      coms4733-rl-arm bash
 
-   $ mkdir -p ~/.mujoco && cp /path/to/mjkey.txt ~/.mujoco/mjkey.txt
-
-4. Launch the container and bind-mount the current repo plus your license:
-
-   $ docker run --platform linux/amd64 --rm -it \
-       -v ~/.mujoco/mjkey.txt:/root/.mujoco/mjkey.txt:ro \
-       -v "$(pwd)":/workspace \
-       coms4733-rl bash
-
-   The Dockerfile already installs MuJoCo 2.1.0 and all Python requirements.
-   You're dropped inside /workspace. Run any script exactly like on
-   Linux:
+   Run scripts exactly as on Linux:
 
    root@container:/workspace# python example_agent.py
-   root@container:/workspace# MUJOCO_GL=osmesa python SAC_Agent/train.py
+   root@container:/workspace# python SAC_Agent/train.py
 
 Notes:
-- Apple Silicon virtualization emulates x86_64, so builds are slower than on
-  native Linux but require zero macOS toolchain tweaks.
+- Rosetta emulation is slower than native ARM execution but avoids OS-specific
+  dependencies.
 - Your host files remain owned by you because Docker only writes to the mounted
   workspace.
-- Update MUJOCO_GL or MODEL_PATH the same way you would outside Docker.
+- Forward X11 or run a lightweight VNC server if you need GUI rendering.
 
 
 NOTES
 --------------------------------------------------------------------------------
 
-- This project uses mujoco_py, which is the older Python bindings for MuJoCo.
-  The newer mujoco package (without _py) is not compatible with this codebase.
+- The project now uses the official `mujoco` Python bindings, so no license
+  file or GCC 9 installation is required.
 
-- The first compilation of mujoco_py can take 10-30 minutes depending on
-  your system. Be patient!
+- The first run may spend a few seconds building the IK chain and renderer
+  cache—subsequent runs are much faster.
 
-- If you're using an Apple Silicon Mac (M1/M2), you may encounter additional
-  compatibility issues. This guide was tested on Intel-based macOS.
-
-- For rendering, the project uses OSMesa (software rendering) by default.
-  This is set via MUJOCO_GL=osmesa environment variable.
+- Apple Silicon works out of the box; use Docker only if you need to reproduce
+  a specific Linux environment.
 
 ================================================================================
 End of Setup Guide

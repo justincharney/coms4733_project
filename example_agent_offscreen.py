@@ -2,19 +2,14 @@
 
 """
 Example agent script with offscreen rendering.
-This avoids creating an interactive MjViewer window while still capturing images.
-Works completely headless without X11/xvfb.
+This avoids creating an interactive viewer window while still capturing images
+and works completely headless without X11/xvfb thanks to the official mujoco
+Python bindings.
 
-The key is:
-- render=False: Don't create interactive viewer (no GLFW/X11 needed)
-- MUJOCO_GL=osmesa: Use software rendering for sim.render() image capture
-- Observations still work via sim.render() in get_image_data()
+Key ideas:
+- render=False so no interactive viewer window is created
+- All observations come from the controller's sim.render() calls
 """
-
-import os
-
-# IMPORTANT: Set this BEFORE importing mujoco_py or gym
-os.environ["MUJOCO_GL"] = "osmesa"
 
 import gym
 import numpy as np
@@ -24,7 +19,7 @@ import cv2 as cv
 
 print(colored("\n=== Offscreen Rendering Mode ===", color="cyan", attrs=["bold"]))
 print("This mode works completely headless without X11/xvfb")
-print("Images are captured via sim.render() using OSMesa\n")
+print("Images are captured via sim.render() and saved to disk\n")
 
 # render=False means no interactive viewer window is created
 # Observations still work because get_image_data() uses sim.render()

@@ -1,7 +1,3 @@
-import os
-
-os.environ["MUJOCO_GL"] = "osmesa"
-
 import gym
 import torch
 import torchvision.transforms as T

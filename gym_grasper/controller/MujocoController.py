@@ -5,16 +5,19 @@
 from collections import defaultdict
 import os
 from pathlib import Path
-import mujoco_py as mp
 import time
+import copy
+
+import mujoco
 import numpy as np
+import cv2 as cv
+import matplotlib.pyplot as plt
 from simple_pid import PID
 from termcolor import colored
 from ikpy.chain import Chain
 from pyquaternion import Quaternion
-import cv2 as cv
-import matplotlib.pyplot as plt
-import copy
+
+from gym_grasper.mujoco_compat import ModelWrapper, SimWrapper
 from decorators import debug
 
 
@@ -30,19 +33,22 @@ class MJ_Controller(object):
         path = os.path.realpath(__file__)
         path = str(Path(path).parent.parent.parent)
         if model is None:
-            self.model = mp.load_model_from_path(
+            raw_model = mujoco.MjModel.from_xml_path(
                 path + "/UR5+gripper/UR5gripper_2_finger.xml"
             )
-        else:
+            self.model = ModelWrapper(raw_model)
+        elif isinstance(model, ModelWrapper):
             self.model = model
-        self.sim = mp.MjSim(self.model) if simulation is None else simulation
-        # Handle viewer: None = auto-create, False = headless mode, otherwise use provided
-        if viewer is None:
-            self.viewer = mp.MjViewer(self.sim)
-        elif viewer is False:
-            self.viewer = None
         else:
-            self.viewer = viewer
+            self.model = ModelWrapper(model)
+
+        if simulation is None:
+            self.sim = SimWrapper(self.model.raw)
+        else:
+            self.sim = simulation
+
+        # Viewer rendering is optional; most workflows run headless.
+        self.viewer = None if viewer in (None, False) else viewer
         self.create_lists()
         self.groups = defaultdict(list)
         self.groups["All"] = list(range(len(self.sim.data.ctrl)))
@@ -380,7 +386,7 @@ class MJ_Controller(object):
                 if plot and steps % 2 == 0:
                     self.fill_plot_list(group, steps)
 
-                temp = self.sim.data.body_xpos[self.model.body_name2id("ee_link")] - [
+                temp = self.sim.data.xpos[self.model.body_name2id("ee_link")] - [
                     0,
                     -0.005,
                     0.16,
@@ -532,7 +538,7 @@ class MJ_Controller(object):
             # base link. This is because the inverse kinematics solver chain starts at the base link.
             ee_position_base = (
                 ee_position
-                - self.sim.data.body_xpos[self.model.body_name2id("base_link")]
+                - self.sim.data.xpos[self.model.body_name2id("base_link")]
             )
 
             # By adding the appr. distance between ee_link and grasp center, we can now specify a world target position
@@ -543,7 +549,7 @@ class MJ_Controller(object):
             # Use the current joint configuration as the IK seed to satisfy joint limits.
             initial_position = [0.0]
             for idx, joint_name in enumerate(self._ik_joint_names):
-                qpos = self.sim.data.get_joint_qpos(joint_name)
+                qpos = self._get_joint_qpos(joint_name)
                 # get_joint_qpos returns a numpy array for hinge joints
                 current_value = float(np.atleast_1d(qpos)[0])
                 lower, upper = self._ik_joint_limits[idx]
@@ -562,7 +568,7 @@ class MJ_Controller(object):
 
             prediction = (
                 self.ee_chain.forward_kinematics(joint_angles)[:3, 3]
-                + self.sim.data.body_xpos[self.model.body_name2id("base_link")]
+                + self.sim.data.xpos[self.model.body_name2id("base_link")]
                 - [0, -0.005, 0.16]
             )
             diff = abs(prediction - ee_position)
@@ -583,7 +589,7 @@ class MJ_Controller(object):
         TODO: Implement orientation.
         """
         target_position = pose_target[:3]
-        target_position -= self.sim.data.body_xpos[self.model.body_name2id("base_link")]
+        target_position -= self.sim.data.xpos[self.model.body_name2id("base_link")]
         orientation = Quaternion(pose_target[3:])
         target_orientation = orientation.rotation_matrix
         target_matrix = orientation.transformation_matrix
@@ -622,7 +628,7 @@ class MJ_Controller(object):
             name = self.model.joint_id2name(i)
             print(
                 "Current angle for joint {}: {}".format(
-                    name, self.sim.data.get_joint_qpos(name)
+                    name, self._get_joint_qpos(name)
                 )
             )
             # print('Current angle for joint {}: {}'.format(self.model.joint_id2name(i), self.sim.data.qpos[i]))
@@ -633,7 +639,7 @@ class MJ_Controller(object):
         for i in range(self.model.nbody):
             print(
                 "Current position for body {}: {}".format(
-                    self.model.body_id2name(i), self.sim.data.body_xpos[i]
+                    self.model.body_id2name(i), self.sim.data.xpos[i]
                 )
             )
 
@@ -643,7 +649,7 @@ class MJ_Controller(object):
         for i in range(self.model.nbody):
             print(
                 "Current rotation for body {}: {}".format(
-                    self.model.body_id2name(i), self.sim.data.body_xmat[i]
+                    self.model.body_id2name(i), self.sim.data.xmat[i]
                 )
             )
 
@@ -653,7 +659,7 @@ class MJ_Controller(object):
         for i in range(self.model.nbody):
             print(
                 "Current rotation for body {}: {}".format(
-                    self.model.body_id2name(i), self.sim.data.body_xquat[i]
+                    self.model.body_id2name(i), self.sim.data.xquat[i]
                 )
             )
 
@@ -783,9 +789,13 @@ class MJ_Controller(object):
             camera: String specifying the name of the camera to use.
         """
 
-        rgb, depth = copy.deepcopy(
-            self.sim.render(width=width, height=height, camera_name=camera, depth=True)
+        rgb, depth = self.sim.render(
+            width=width, height=height, camera_name=camera, depth=True
         )
+        rgb = np.asarray(rgb)
+        depth = np.asarray(depth)
+        if rgb.dtype != np.uint8:
+            rgb = (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
         if show:
             cv.imshow("rbg", cv.cvtColor(rgb, cv.COLOR_BGR2RGB))
             # cv.imshow('depth', depth)
@@ -879,6 +889,10 @@ class MJ_Controller(object):
         pos_w = np.linalg.inv(self.cam_rot_mat) @ (pos_c + self.cam_pos)
 
         return pos_w
+
+    def _get_joint_qpos(self, joint_name):
+        start, end = self.model.get_joint_qpos_addr(joint_name)
+        return np.array(self.sim.data.qpos[start:end])
 
     def add_marker(self, coordinates, label=True, size=None, color=None):
         """

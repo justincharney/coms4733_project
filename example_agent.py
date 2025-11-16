@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
 
-import os
-
-# IMPORTANT: Set this BEFORE importing mujoco_py or gym
-os.environ["MUJOCO_GL"] = "osmesa"
-
 import gym
 import numpy as np
 from termcolor import colored
 import time
+from tqdm import trange
 
 env = gym.make("gym_grasper:Grasper-v0", show_obs=False, render=False)
 

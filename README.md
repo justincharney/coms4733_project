@@ -30,7 +30,7 @@ This repository provides several python classes for control of robotic arms in M
 The difference to most other MuJoCo Gym environments is that the observation returned is a camera image instead of a state vector of the simulation. This is meant to resemble a real world setup more closely. 
 
 The robot configuration used in this setup (Universal Robots UR5 + Robotiq S Model 3 Finger Gripper) is based on [this](http://www.mujoco.org/forum/index.php?resources/universal-robots-ur5-robotiq-s-model-3-finger-gripper.22/) resource.  It has since been heavily modified. Most current XML-file: *UR5gripper_2_finger.xml*  
-The python bindings used come from [mujoco_py](https://github.com/openai/mujoco-py/tree/master/mujoco_py).  
+The python bindings now rely on the maintained [mujoco](https://github.com/google-deepmind/mujoco/tree/main/python) package, so no legacy `mujoco_py` build step or license file is required.  
 The PID controllers implemented are based on [simple_pid](https://github.com/m-lundberg/simple-pid).  
 A simple inverse kinematics solver for translating end-effector positions into joint angles has been implemented using [ikpy](https://github.com/Phylliade/ikpy).
 
@@ -38,9 +38,7 @@ The required modules can be installed either manually or using the provided requ
 
 ## **Setup**
 
-Download and install MuJoCo from [here](https://www.roboti.us/index.html). Set up a license and activate it [here](https://www.roboti.us/license.html).
-
-Then clone this repo: 
+Clone this repo: 
 ```
 git clone https://github.com/PaulDanielML/MuJoCo_RL_UR5.git
 ```
@@ -52,7 +50,7 @@ If desired, activate a virtual environment, then run
 ```
 pip install -r requirements.txt
 ```
-This will install all required packages using pip. The first time you run a script that uses the *Mujoco_UR5_controller* class some more setup might happen, which can take a few moments.
+This installs all required packages, including the MuJoCo runtime distributed via PyPI. No separate license activation or compiler toolchain is required on Apple Silicon.  
 This is all the setup required to use this repo.  
 
 
@@ -110,7 +108,7 @@ The class *MJ_Controller* offers high and low level methods for controlling the 
 ![grasp](/media/grasp.png "Example grasp")
 
 **Point clouds:** The controller class was provided with new methods for image transformations. 
-* depth_2_meters: Converts the normalized depth values returned by mujoco_py into m.
+* depth_2_meters: Converts the normalized depth values returned by MuJoCo into m.
 * create_camera_data: Constructs a camera matrix, focal length and sets the camera's position and rotation based on a provided camera name and desired image width and depth. 
 * world_2_pixel: Accepts a XYZ world position and returns the corresponding x-y pixel coordinates 
 * pixel_2_world: Accepts x-y pixel coordinates and a depth value, returns the XYZ world position. This method can be used to construct point clouds out of the data returned by the controllers *get_image_data* method.

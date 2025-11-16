@@ -13,9 +13,6 @@ import sys
 import torch
 from pathlib import Path
 
-# IMPORTANT: Set this BEFORE importing mujoco_py or gym
-os.environ["MUJOCO_GL"] = "osmesa"
-
 # Add the current directory to path to import Grasping_Agent
 sys.path.insert(0, str(Path(__file__).parent))
 

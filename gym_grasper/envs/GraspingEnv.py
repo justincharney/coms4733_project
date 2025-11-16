@@ -9,8 +9,7 @@ import time
 import math
 import cv2 as cv
 import numpy as np
-import mujoco_py
-from gym.envs.mujoco import mujoco_env
+from gym_grasper.mujoco_compat import MujocoEnv
 from gym import utils, spaces
 from gym_grasper.controller.MujocoController import MJ_Controller
 import traceback
@@ -22,7 +21,7 @@ from decorators import *
 from pyquaternion import Quaternion
 
 
-class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
+class GraspEnv(MujocoEnv, utils.EzPickle):
     # def __init__(self, file='/UR5+gripper/UR5gripper_2_finger.xml', image_width=200, image_height=200, show_obs=True, demo=False, render=False):
     # def __init__(self, file='/UR5+gripper/UR5gripper_2_finger.xml', image_width=200, image_height=200, show_obs=True, demo=False, render=False):
     def __init__(
@@ -44,7 +43,7 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         path = os.path.realpath(__file__)
         path = str(Path(path).parent.parent.parent)
         full_path = path + file
-        mujoco_env.MujocoEnv.__init__(self, full_path, 1)
+        MujocoEnv.__init__(self, full_path, 1)
         if render:
             # render once to initialize a viewer object
             self.render()
@@ -524,7 +523,7 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         return self.get_observation(show=self.show_observations)
 
     def close(self):
-        mujoco_env.MujocoEnv.close(self)
+        MujocoEnv.close(self)
         try:
             cv.destroyAllWindows()
         except cv.error:

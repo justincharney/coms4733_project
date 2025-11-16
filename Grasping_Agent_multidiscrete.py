@@ -1,10 +1,7 @@
 # Author: Paul Daniel (pdd@mp.aau.dk)
-import os
 import sys
 import atexit
 from pathlib import Path
-
-os.environ["MUJOCO_GL"] = "osmesa"
 
 import gym
 import torch
