@@ -4,18 +4,132 @@ import torchvision.transforms as T
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.tensorboard import SummaryWriter
-from Modules import ReplayBuffer
 import numpy as np
 import pickle
 import random
 import copy
 from collections import deque, defaultdict, namedtuple
+from dataclasses import dataclass
 import time
 from .networks import Actor, QNetwork
 from pathlib import Path
 
 # Transition with done flag for SAC
 Transition = namedtuple("Transition", ("state", "action", "next_state", "reward", "done"))
+AgentObservation = namedtuple("AgentObservation", ("state", "desired_goal", "achieved_goal"))
+
+
+@dataclass
+class EpisodeTransition:
+    obs: AgentObservation
+    action: torch.Tensor
+    next_obs: AgentObservation
+    reward: torch.Tensor
+    done: torch.Tensor
+    achieved_goal: np.ndarray
+    next_achieved_goal: np.ndarray
+
+
+class HERReplayBuffer:
+    """Stores full episodes and supports future-goal relabelling."""
+
+    def __init__(self, capacity, her_ratio=0.8):
+        self.capacity = capacity
+        self.her_ratio = her_ratio
+        self.episodes = deque()
+        self.num_transitions = 0
+
+    def __len__(self):
+        return self.num_transitions
+
+    def push_episode(self, transitions):
+        if not transitions:
+            return
+        # Store clones to avoid accidental mutation from outside callers.
+        cloned_episode = [self._clone_transition(t) for t in transitions]
+        self.episodes.append(cloned_episode)
+        self.num_transitions += len(cloned_episode)
+        while self.num_transitions > self.capacity and self.episodes:
+            removed = self.episodes.popleft()
+            self.num_transitions -= len(removed)
+
+    def sample(self, batch_size, env):
+        if self.num_transitions == 0:
+            return []
+        samples = []
+        episodes = list(self.episodes)
+        for _ in range(batch_size):
+            episode = random.choice(episodes)
+            idx = random.randrange(len(episode))
+            samples.append((episode, idx))
+
+        batch = []
+        for episode, idx in samples:
+            transition = episode[idx]
+            use_her = len(episode) > 1 and random.random() < self.her_ratio
+            if use_her:
+                future_idx = random.randint(idx, len(episode) - 1)
+                future_goal = episode[future_idx].next_achieved_goal
+                batch.append(self._relabeled_transition(transition, future_goal, env))
+            else:
+                batch.append(self._standard_transition(transition))
+        return batch
+
+    def _clone_transition(self, transition):
+        return EpisodeTransition(
+            obs=AgentObservation(
+                state=transition.obs.state.clone(),
+                desired_goal=transition.obs.desired_goal.clone(),
+                achieved_goal=transition.obs.achieved_goal.clone(),
+            ),
+            action=transition.action.clone(),
+            next_obs=AgentObservation(
+                state=transition.next_obs.state.clone(),
+                desired_goal=transition.next_obs.desired_goal.clone(),
+                achieved_goal=transition.next_obs.achieved_goal.clone(),
+            ),
+            reward=transition.reward.clone(),
+            done=transition.done.clone(),
+            achieved_goal=transition.achieved_goal.copy(),
+            next_achieved_goal=transition.next_achieved_goal.copy(),
+        )
+
+    def _standard_transition(self, transition):
+        return (
+            AgentObservation(
+                state=transition.obs.state.clone(),
+                desired_goal=transition.obs.desired_goal.clone(),
+                achieved_goal=transition.obs.achieved_goal.clone(),
+            ),
+            transition.action.clone(),
+            AgentObservation(
+                state=transition.next_obs.state.clone(),
+                desired_goal=transition.next_obs.desired_goal.clone(),
+                achieved_goal=transition.next_obs.achieved_goal.clone(),
+            ),
+            transition.reward.clone(),
+            transition.done.clone(),
+        )
+
+    def _relabeled_transition(self, transition, desired_goal, env):
+        goal_tensor = torch.tensor(desired_goal, dtype=torch.float32).view(1, -1)
+        obs = AgentObservation(
+            state=transition.obs.state.clone(),
+            desired_goal=goal_tensor.clone(),
+            achieved_goal=transition.obs.achieved_goal.clone(),
+        )
+        next_obs = AgentObservation(
+            state=transition.next_obs.state.clone(),
+            desired_goal=goal_tensor.clone(),
+            achieved_goal=transition.next_obs.achieved_goal.clone(),
+        )
+        reward_value = env.compute_reward(transition.next_achieved_goal, desired_goal, info=None)
+        reward_tensor = torch.tensor([[reward_value]], dtype=torch.float32)
+        done_value = 1.0 if reward_value > 0 else transition.done.item()
+        done_tensor = torch.tensor([[done_value]], dtype=torch.float32)
+        return (obs, transition.action.clone(), next_obs, reward_tensor, done_tensor)
+
+
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Find project root (parent of SAC_Agent directory)
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -32,21 +146,23 @@ class SAC_Agent:
     def __init__(
         self,
         seed,
-        n_episodes=1,
-        steps_per_episode=1,
+        n_episodes=1000,
+        steps_per_episode=50,
         number_accumulations_before_update=1,
-        max_possible_samples=1,
+        max_possible_samples=256,
+        memory_size=50000,
         depth_only=False,
         load_path=None,
         train=True,
         auto_alpha=True,
+        her_ratio=0.8,
     ):
         """
         Args:
             height: Observation height (in pixels).
             width: Observation width (in pixels).
             learning_rate: Learning rate for optimizers.
-            mem_size: Number of transitions to be stored in the replay buffer.
+            memory_size: Number of transitions to be stored in the replay buffer.
             depth_only: If True, use only depth channel.
             load_path: Path to load pretrained weights.
             train: If True, initialize for training (replay buffer, optimizers).
@@ -62,9 +178,11 @@ class SAC_Agent:
         random.seed(seed)
         self.depth_only = depth_only
         self.auto_alpha = auto_alpha
-        self.height = 200
-        self.width = 200
-        self.memory_size = 2000
+        # Downsample observations slightly to reduce memory pressure inside the
+        # perception module / replay buffer.
+        self.height = 160
+        self.width = 160
+        self.memory_size = memory_size
         self.gamma = 0.99  # SAC typically uses non-zero gamma
         self.learning_rate = 0.0003  # SAC default learning rate
         self.tau = 0.005  # Soft update coefficient for target networks
@@ -78,6 +196,7 @@ class SAC_Agent:
         self.max_possible_samples = max_possible_samples
         self.number_accumulations_before_update = number_accumulations_before_update
         self.batch_size = self.max_possible_samples * self.number_accumulations_before_update
+        self.her_ratio = her_ratio
 
         if train:
             self.env = gym.make(
@@ -102,13 +221,13 @@ class SAC_Agent:
             self.env.action_space.nvec[1],
         )
         self.output = self.n_actions_1 * self.n_actions_2
+        desired_goal = np.array(self.env.desired_goal)
+        self.goal_dim = desired_goal.size if desired_goal.shape else 0
 
         # Automatic alpha tuning (after n_actions is defined)
         if auto_alpha:
             # Learnable log_alpha parameter
-            self.log_alpha = torch.nn.Parameter(
-                torch.tensor(np.log(self.alpha), device=device), requires_grad=True
-            )
+            self.log_alpha = torch.nn.Parameter(torch.tensor(np.log(self.alpha), device=device), requires_grad=True)
             # Target entropy: -log(1/num_actions) for uniform policy baseline
             # For discrete uniform: H = -sum(1/A * log(1/A)) = log(A)
             # We'll use a fraction of this as target (e.g., 0.1 * log(A))
@@ -119,13 +238,13 @@ class SAC_Agent:
             self.target_entropy = None
 
         # Initialize networks
-        self.actor = Actor(self.output, depth_only=self.depth_only).to(device)
-        self.critic1 = QNetwork(self.output, depth_only=self.depth_only).to(device)
-        self.critic2 = QNetwork(self.output, depth_only=self.depth_only).to(device)
+        self.actor = Actor(self.output, goal_dim=self.goal_dim, depth_only=self.depth_only).to(device)
+        self.critic1 = QNetwork(self.output, goal_dim=self.goal_dim, depth_only=self.depth_only).to(device)
+        self.critic2 = QNetwork(self.output, goal_dim=self.goal_dim, depth_only=self.depth_only).to(device)
 
         # Target networks
-        self.critic1_target = QNetwork(self.output, depth_only=self.depth_only).to(device)
-        self.critic2_target = QNetwork(self.output, depth_only=self.depth_only).to(device)
+        self.critic1_target = QNetwork(self.output, goal_dim=self.goal_dim, depth_only=self.depth_only).to(device)
+        self.critic2_target = QNetwork(self.output, goal_dim=self.goal_dim, depth_only=self.depth_only).to(device)
 
         # Initialize target networks with same weights as main networks
         self.critic1_target.load_state_dict(self.critic1.state_dict())
@@ -150,9 +269,7 @@ class SAC_Agent:
             ]
         )
         self.normal_rgb_no_jitter_no_noise = T.Compose([T.ToTensor()])
-        self.normal_depth = T.Compose(
-            [T.Lambda(lambda x: x + 0.01 * torch.randn_like(x))]
-        )
+        self.normal_depth = T.Compose([T.Lambda(lambda x: x + 0.01 * torch.randn_like(x))])
         self.depth_threshold = np.round(
             self.env.model.cam_pos0[self.env.model.camera_name2id("top_down")][2] - self.env.TABLE_HEIGHT + 0.01,
             decimals=3,
@@ -160,22 +277,9 @@ class SAC_Agent:
         self.last_action = None
 
         if train:
-            # Set up replay buffer
-            self.memory = ReplayBuffer(self.memory_size, simple=False)
-
-            # Override push to handle done flag
-            def push_with_done(memory_self, state, action, next_state, reward, done):
-                # Store transition with done flag
-                if len(memory_self.memory) < memory_self.size:
-                    memory_self.memory.append(None)
-                memory_self.memory[memory_self.position] = Transition(
-                    state, action, next_state, reward, done
-                )
-                memory_self.position = (memory_self.position + 1) % memory_self.size
-
-            # Bind the method to the memory object
-            import types
-            self.memory.push = types.MethodType(push_with_done, self.memory)
+            # Set up HER replay buffer and per-episode storage
+            self.memory = HERReplayBuffer(self.memory_size, her_ratio=self.her_ratio)
+            self.current_episode = []
 
             # Optimizers
             if self.optimizer == "SGD":
@@ -198,9 +302,7 @@ class SAC_Agent:
                     weight_decay=0.00002,
                 )
             elif self.optimizer == "ADAM":
-                self.actor_optimizer = optim.Adam(
-                    self.actor.parameters(), lr=self.learning_rate, weight_decay=0.00002
-                )
+                self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=self.learning_rate, weight_decay=0.00002)
                 self.critic1_optimizer = optim.Adam(
                     self.critic1.parameters(), lr=self.learning_rate, weight_decay=0.00002
                 )
@@ -210,29 +312,17 @@ class SAC_Agent:
 
             # Alpha optimizer (only if auto_alpha is enabled)
             if auto_alpha:
-                self.alpha_optimizer = optim.Adam(
-                    [self.log_alpha], lr=self.alpha_lr, weight_decay=0.0
-                )
+                self.alpha_optimizer = optim.Adam([self.log_alpha], lr=self.alpha_lr, weight_decay=0.0)
 
             if load_path is not None:
-                self.actor_optimizer.load_state_dict(
-                    checkpoint["actor_optimizer_state_dict"]
-                )
-                self.critic1_optimizer.load_state_dict(
-                    checkpoint["critic1_optimizer_state_dict"]
-                )
-                self.critic2_optimizer.load_state_dict(
-                    checkpoint["critic2_optimizer_state_dict"]
-                )
+                self.actor_optimizer.load_state_dict(checkpoint["actor_optimizer_state_dict"])
+                self.critic1_optimizer.load_state_dict(checkpoint["critic1_optimizer_state_dict"])
+                self.critic2_optimizer.load_state_dict(checkpoint["critic2_optimizer_state_dict"])
                 if auto_alpha and "alpha_optimizer_state_dict" in checkpoint:
-                    self.alpha_optimizer.load_state_dict(
-                        checkpoint["alpha_optimizer_state_dict"]
-                    )
+                    self.alpha_optimizer.load_state_dict(checkpoint["alpha_optimizer_state_dict"])
                     if "log_alpha" in checkpoint:
                         self.log_alpha.data = checkpoint["log_alpha"]
-                self.steps_done = (
-                    checkpoint["step"] if "step" in checkpoint.keys() else 0
-                )
+                self.steps_done = checkpoint["step"] if "step" in checkpoint.keys() else 0
             else:
                 self.steps_done = 0
 
@@ -273,23 +363,17 @@ class SAC_Agent:
                 weight_filename = self.DESCRIPTION + "_" + date + "_weights.pt"
                 self.WEIGHT_PATH = MODEL_OUTPUT_FOLDER / weight_filename
             else:
-                self.DESCRIPTION = (
-                    "_continue_" + load_path[:-11] + "_at_" + str(self.steps_done)
-                )
+                self.DESCRIPTION = "_continue_" + load_path[:-11] + "_at_" + str(self.steps_done)
                 self.WEIGHT_PATH = load_path
 
             # Tensorboard setup
             self.writer = SummaryWriter(comment=self.DESCRIPTION)
+            dummy_goal = torch.zeros(1, self.goal_dim).to(device)
             if not self.depth_only:
-                self.writer.add_graph(
-                    self.actor,
-                    torch.zeros(1, 4, self.width, self.height).to(device),
-                )
+                dummy_state = torch.zeros(1, 4, self.width, self.height).to(device)
             else:
-                self.writer.add_graph(
-                    self.actor,
-                    torch.zeros(1, 1, self.width, self.height).to(device),
-                )
+                dummy_state = torch.zeros(1, 1, self.width, self.height).to(device)
+            self.writer.add_graph(self.actor, (dummy_state, dummy_goal))
 
             self.last_1000_rewards = deque(maxlen=1000)
             self.last_100_loss = deque(maxlen=100)
@@ -298,7 +382,7 @@ class SAC_Agent:
             self.greedy_rotations_successes = defaultdict(int)
             self.random_rotations_successes = defaultdict(int)
 
-    def select_action(self, state, deterministic=False):
+    def select_action(self, observation, deterministic=False):
         """
         Select an action using the actor policy.
 
@@ -311,7 +395,9 @@ class SAC_Agent:
             log_prob: Log probability of the action (for training)
         """
         with torch.no_grad():
-            logits = self.actor(state.to(device))
+            state_tensor = observation.state.to(device)
+            goal_tensor = observation.desired_goal.to(device) if observation.desired_goal is not None else None
+            logits = self.actor(state_tensor, goal_tensor)
             if deterministic:
                 # Greedy action
                 action = logits.argmax(dim=1)
@@ -325,7 +411,7 @@ class SAC_Agent:
 
         return action.cpu(), log_prob.cpu()
 
-    def greedy(self, state, return_q_value=True):
+    def greedy(self, observation, return_q_value=True):
         """
         Always returns the greedy action. For demonstrating learned behaviour.
 
@@ -336,11 +422,13 @@ class SAC_Agent:
         """
         self.last_action = "greedy"
         with torch.no_grad():
-            logits = self.actor(state.to(device))
+            state_tensor = observation.state.to(device)
+            goal_tensor = observation.desired_goal.to(device) if observation.desired_goal is not None else None
+            logits = self.actor(state_tensor, goal_tensor)
             action = logits.argmax(dim=1)
             if return_q_value:
                 # Get Q-value from critic for logging (slower - runs Perception_Module twice)
-                q_value = self.critic1(state.to(device), action.to(device))
+                q_value = self.critic1(state_tensor, action.to(device), goal_tensor)
                 return action.cpu(), q_value.item()
             else:
                 # Skip critic computation for faster inference
@@ -377,9 +465,7 @@ class SAC_Agent:
                 rgb_tensor = self.normal_rgb_no_jitter_no_noise(rgb).float()
             if not normalize:
                 self.means, self.stds = self.get_mean_std()
-                self.standardize_rgb = T.Compose(
-                    [T.ToTensor(), T.Normalize(self.means[0:3], self.stds[0:3])]
-                )
+                self.standardize_rgb = T.Compose([T.ToTensor(), T.Normalize(self.means[0:3], self.stds[0:3])])
                 rgb_tensor = self.standardize_rgb(rgb).float()
 
         depth_tensor = torch.tensor(depth).float()
@@ -403,7 +489,21 @@ class SAC_Agent:
         else:
             del depth, depth_tensor
 
-        return obs_tensor
+        desired_goal = observation.get("desired_goal")
+        if desired_goal is None:
+            desired_goal = getattr(self.env, "desired_goal", np.zeros(self.goal_dim))
+        desired_goal_tensor = torch.tensor(desired_goal, dtype=torch.float32).view(1, -1)
+
+        achieved_goal = observation.get("achieved_goal")
+        if achieved_goal is None:
+            achieved_goal = np.zeros(self.goal_dim)
+        achieved_goal_tensor = torch.tensor(achieved_goal, dtype=torch.float32).view(1, -1)
+
+        return AgentObservation(
+            state=obs_tensor,
+            desired_goal=desired_goal_tensor,
+            achieved_goal=achieved_goal_tensor,
+        )
 
     def get_mean_std(self):
         """Reads and returns the mean and standard deviation values."""
@@ -419,6 +519,48 @@ class SAC_Agent:
         action_2 = action_value // self.n_actions_1
         return np.array([action_1, action_2])
 
+    def start_new_episode(self):
+        if hasattr(self, "current_episode"):
+            self.current_episode = []
+
+    def store_transition(
+        self,
+        observation,
+        action,
+        next_observation,
+        reward,
+        done,
+        raw_obs,
+        raw_next_obs,
+    ):
+        if not hasattr(self, "current_episode"):
+            return
+        achieved_goal = np.array(raw_obs.get("achieved_goal", self.env.achieved_goal), dtype=np.float32)
+        next_achieved_goal = np.array(raw_next_obs.get("achieved_goal", achieved_goal), dtype=np.float32)
+        transition = EpisodeTransition(
+            obs=AgentObservation(
+                state=observation.state.clone(),
+                desired_goal=observation.desired_goal.clone(),
+                achieved_goal=observation.achieved_goal.clone(),
+            ),
+            action=action.clone(),
+            next_obs=AgentObservation(
+                state=next_observation.state.clone(),
+                desired_goal=next_observation.desired_goal.clone(),
+                achieved_goal=next_observation.achieved_goal.clone(),
+            ),
+            reward=reward.clone(),
+            done=done.clone(),
+            achieved_goal=achieved_goal,
+            next_achieved_goal=next_achieved_goal,
+        )
+        self.current_episode.append(transition)
+
+    def finalize_episode(self):
+        if hasattr(self, "current_episode") and self.current_episode:
+            self.memory.push_episode(self.current_episode)
+            self.current_episode = []
+
     def soft_update(self, target, source, tau):
         """Soft update target network parameters."""
         for target_param, param in zip(target.parameters(), source.parameters()):
@@ -430,11 +572,12 @@ class SAC_Agent:
         Updates actor and both critics.
         """
         if len(self.memory) < 2 * self.batch_size:
-            print("Filling the replay buffer ...")
             return
 
-        # Sample batch from replay buffer
-        transitions = self.memory.sample(self.batch_size)
+        # Sample batch from replay buffer (HER relabelled when applicable)
+        transitions = self.memory.sample(self.batch_size, self.env)
+        if not transitions:
+            return
         batch = Transition(*zip(*transitions))
 
         # Gradient accumulation
@@ -442,11 +585,14 @@ class SAC_Agent:
             start_idx = i * self.max_possible_samples
             end_idx = (i + 1) * self.max_possible_samples
 
-            state_batch = torch.cat(batch.state[start_idx:end_idx]).to(device)
+            state_obs = batch.state[start_idx:end_idx]
+            next_state_obs = batch.next_state[start_idx:end_idx]
+
+            state_batch = torch.cat([obs.state for obs in state_obs]).to(device)
+            goal_batch = torch.cat([obs.desired_goal for obs in state_obs]).to(device)
             action_batch = torch.cat(batch.action[start_idx:end_idx]).to(device)
-            next_state_batch = torch.cat(
-                batch.next_state[start_idx:end_idx]
-            ).to(device)
+            next_state_batch = torch.cat([obs.state for obs in next_state_obs]).to(device)
+            next_goal_batch = torch.cat([obs.desired_goal for obs in next_state_obs]).to(device)
             reward_batch = torch.cat(batch.reward[start_idx:end_idx]).to(device)
             done_batch = torch.cat(batch.done[start_idx:end_idx]).to(device)
 
@@ -466,33 +612,25 @@ class SAC_Agent:
             # --------- Critic update ---------
             with torch.no_grad():
                 # Get next action and log prob from current policy
-                next_logits = self.actor(next_state_batch)
+                next_logits = self.actor(next_state_batch, next_goal_batch)
                 next_dist = torch.distributions.Categorical(logits=next_logits)
                 next_action = next_dist.sample()
                 next_log_prob = next_dist.log_prob(next_action)
 
                 # Compute target Q-values using target networks
-                target_q1 = self.critic1_target(next_state_batch, next_action)
-                target_q2 = self.critic2_target(next_state_batch, next_action)
-                target_q = torch.min(target_q1, target_q2) - current_alpha * next_log_prob.unsqueeze(
-                    1
-                )
+                target_q1 = self.critic1_target(next_state_batch, next_action, next_goal_batch)
+                target_q2 = self.critic2_target(next_state_batch, next_action, next_goal_batch)
+                target_q = torch.min(target_q1, target_q2) - current_alpha * next_log_prob.unsqueeze(1)
                 # Mask target Q for terminal states
                 target_q = reward_batch + self.gamma * (1 - done_batch) * target_q
 
             # Current Q-values
-            current_q1 = self.critic1(state_batch, action_indices)
-            current_q2 = self.critic2(state_batch, action_indices)
+            current_q1 = self.critic1(state_batch, action_indices, goal_batch)
+            current_q2 = self.critic2(state_batch, action_indices, goal_batch)
 
             # Critic losses
-            critic1_loss = (
-                F.mse_loss(current_q1, target_q)
-                / self.number_accumulations_before_update
-            )
-            critic2_loss = (
-                F.mse_loss(current_q2, target_q)
-                / self.number_accumulations_before_update
-            )
+            critic1_loss = F.mse_loss(current_q1, target_q) / self.number_accumulations_before_update
+            critic2_loss = F.mse_loss(current_q2, target_q) / self.number_accumulations_before_update
 
             # Update critics
             self.critic1_optimizer.zero_grad()
@@ -504,21 +642,20 @@ class SAC_Agent:
             self.critic2_optimizer.step()
 
             # --------- Actor update ---------
-            logits = self.actor(state_batch)
+            logits = self.actor(state_batch, goal_batch)
             dist = torch.distributions.Categorical(logits=logits)
             new_action = dist.sample()
             new_log_prob = dist.log_prob(new_action)
 
             # Compute Q-values for new actions
-            q1_new = self.critic1(state_batch, new_action)
-            q2_new = self.critic2(state_batch, new_action)
+            q1_new = self.critic1(state_batch, new_action, goal_batch)
+            q2_new = self.critic2(state_batch, new_action, goal_batch)
             q_new = torch.min(q1_new, q2_new)
 
             # Actor loss: maximize Q - alpha * log_prob (entropy regularization)
             actor_loss = (
-                (current_alpha * new_log_prob.unsqueeze(1) - q_new).mean()
-                / self.number_accumulations_before_update
-            )
+                current_alpha * new_log_prob.unsqueeze(1) - q_new
+            ).mean() / self.number_accumulations_before_update
 
             self.actor_optimizer.zero_grad()
             actor_loss.backward()
@@ -596,9 +733,7 @@ class SAC_Agent:
         if len(self.last_1000_rewards) > 99 and self.steps_done % 10 == 0:
             last_100 = list(self.last_1000_rewards)[-100:]
             mean_reward_100 = np.mean(last_100)
-            self.writer.add_scalar(
-                "Mean reward/Last100", mean_reward_100, global_step=self.steps_done
-            )
+            self.writer.add_scalar("Mean reward/Last100", mean_reward_100, global_step=self.steps_done)
 
         if len(self.last_1000_rewards) > 999 and self.steps_done % 10 == 0:
             mean_reward_1000 = np.mean(self.last_1000_rewards)

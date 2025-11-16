@@ -19,6 +19,7 @@ from collections import defaultdict
 from termcolor import colored
 from decorators import *
 from pyquaternion import Quaternion
+from csv import DictWriter
 
 
 class GraspEnv(MujocoEnv, utils.EzPickle):
@@ -39,6 +40,19 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
         self.rotations = {0: 0, 1: 30, 2: 60, 3: 90, 4: -30, 5: -60}
         self.action_space_type = "multidiscrete"
         self.step_called = 0
+        self.TABLE_HEIGHT = 0.91
+
+        # Goal/IK bookkeeping used inside MujocoEnv.__init__ when it performs
+        # an initial step. Populate defaults up front so attributes exist.
+        self.object_joint_names = []
+        self.goal_center = np.array([0.6, 0.0, self.TABLE_HEIGHT + 0.02])
+        self.goal_noise = np.array([0.05, 0.05, 0.0])
+        self.goal_tolerance = 0.05
+        self.desired_goal = self.goal_center.copy()
+        self.achieved_goal = np.zeros(3)
+        self.goal_distance = np.inf
+        self.episode_counter = 0
+
         utils.EzPickle.__init__(self)
         path = os.path.realpath(__file__)
         path = str(Path(path).parent.parent.parent)
@@ -54,8 +68,17 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
         self.grasp_counter = 0
         self.show_observations = show_obs
         self.demo_mode = demo
-        self.TABLE_HEIGHT = 0.91
         self.render = render
+
+        # Cache joint names for movable objects so we can query positions quickly
+        self.object_joint_names = sorted(
+            (
+                name
+                for name in self.model.joint_names
+                if name.startswith("free_joint_")
+            ),
+            key=lambda name: int(name.split("_")[-1]),
+        )
 
     def __repr__(self):
         return f"GraspEnv(obs height={self.IMAGE_HEIGHT}, obs_width={self.IMAGE_WIDTH}, AS={self.action_space_type})"
@@ -76,6 +99,7 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
 
         done = False
         info = {}
+        grasped_something = False
         # Parent class will step once during init to set up the observation space, controller is not yet available at that time.
         # Therefore we simply return a dictionary of zeros of the appropriate size.
         if not self.initialized:
@@ -129,6 +153,7 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
                 )
             )
 
+            grasped_something = False
             # Check for coordinates we don't need to try to save some time
             if coordinates[2] < 0.8 or coordinates[1] > -0.3:
                 print(
@@ -138,8 +163,6 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
                         attrs=["bold"],
                     )
                 )
-                # Binary reward
-                reward = 0
 
             else:
                 grasped_something = self.move_and_grasp(
@@ -150,11 +173,10 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
                     markers=markers,
                 )
 
-                reward = 1 if grasped_something else 0
                 if grasped_something != "demo":
                     print(
                         colored(
-                            "Reward received during step: {}".format(reward),
+                            "Grasp result: {}".format(grasped_something),
                             color="yellow",
                             attrs=["bold"],
                         )
@@ -163,6 +185,13 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
             self.current_observation = self.get_observation(show=self.show_observations)
 
         self.step_called += 1
+
+        # Update goal tracking and compute sparse reward
+        achieved_goal, _ = self._update_goal_state()
+        info["grasp_success"] = bool(grasped_something)
+        reward = self.compute_reward(achieved_goal, self.desired_goal, info)
+        if grasped_something:
+            self._log_grasp_event((x, y, rotation), coordinates, reward)
 
         return self.current_observation, reward, done, info
 
@@ -213,6 +242,91 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
             decimals=3,
         )
         # return np.round(max(self.TABLE_HEIGHT, self.TABLE_HEIGHT + height_action * (depth_height - self.TABLE_HEIGHT)/self.action_space.nvec[1]), decimals=3)
+
+    def sample_goal(self):
+        """Sample a new desired goal close to the nominal drop position."""
+
+        noise = np.random.uniform(-self.goal_noise, self.goal_noise)
+        goal = self.goal_center + noise
+        # Keep goal slightly above the table to avoid tunneling below the surface
+        goal[2] = self.goal_center[2]
+        return goal
+
+    def _get_object_positions(self):
+        """Return xyz positions for all free objects on the table."""
+
+        positions = []
+        for joint_name in self.object_joint_names:
+            start, _ = self.model.get_joint_qpos_addr(joint_name)
+            positions.append(np.array(self.data.qpos[start : start + 3]))
+        return np.array(positions) if positions else np.zeros((0, 3))
+
+    def _update_goal_state(self):
+        """Update achieved_goal and cached distance to the desired goal."""
+
+        positions = self._get_object_positions()
+        if positions.size == 0:
+            self.achieved_goal = np.zeros(3)
+            self.goal_distance = np.inf
+            return self.achieved_goal, self.goal_distance
+
+        diffs = positions - self.desired_goal
+        distances = np.linalg.norm(diffs, axis=1)
+        closest_idx = int(np.argmin(distances))
+        self.achieved_goal = positions[closest_idx]
+        self.goal_distance = float(distances[closest_idx])
+        return self.achieved_goal, self.goal_distance
+
+    def compute_reward(self, achieved_goal, desired_goal, info=None):
+        """Goal-based sparse reward: 1 when any cube lands inside the bin."""
+
+        if achieved_goal is None or desired_goal is None:
+            return 0
+
+        distance = np.linalg.norm(achieved_goal - desired_goal)
+        success = distance <= self.goal_tolerance
+        if info is not None:
+            info["goal_distance"] = distance
+            info["goal_tolerance"] = self.goal_tolerance
+            info["desired_goal"] = desired_goal.copy()
+            info["achieved_goal"] = achieved_goal.copy()
+            info["is_success"] = success
+        return int(success)
+
+    def _log_grasp_event(self, pixel_action, world_coordinates, reward):
+        log_dir = Path("logs")
+        log_dir.mkdir(exist_ok=True)
+        log_path = log_dir / "grasp_events.csv"
+        write_header = not log_path.exists()
+        row = {
+            "episode": self.episode_counter,
+            "step": self.step_called,
+            "pixel_x": pixel_action[0],
+            "pixel_y": pixel_action[1],
+            "rotation_idx": pixel_action[2],
+            "world_x": float(world_coordinates[0]),
+            "world_y": float(world_coordinates[1]),
+            "world_z": float(world_coordinates[2]) if len(world_coordinates) > 2 else 0.0,
+            "reward": int(reward),
+        }
+        with log_path.open("a", newline="") as csvfile:
+            writer = DictWriter(
+                csvfile,
+                fieldnames=[
+                    "episode",
+                    "step",
+                    "pixel_x",
+                    "pixel_y",
+                    "rotation_idx",
+                    "world_x",
+                    "world_y",
+                    "world_z",
+                    "reward",
+                ],
+            )
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
 
     def move_and_grasp(
         self,
@@ -438,6 +552,10 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
         observation = defaultdict()
         observation["rgb"] = rgb
         observation["depth"] = depth
+        achieved_goal, _ = self._update_goal_state()
+        observation["achieved_goal"] = achieved_goal.copy()
+        observation["desired_goal"] = self.desired_goal.copy()
+        observation["goal_distance"] = self.goal_distance
 
         return observation
 
@@ -461,12 +579,7 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
             0.3,
         ]
 
-        object_joint_names = sorted(
-            (name for name in self.model.joint_names if name.startswith("free_joint_")),
-            key=lambda name: int(name.split("_")[-1]),
-        )
-
-        for joint_name in object_joint_names:
+        for joint_name in self.object_joint_names:
             q_adr = self.model.get_joint_qpos_addr(joint_name)
             start, end = q_adr
             qpos[start] = np.random.uniform(low=-0.25, high=0.25)
@@ -519,7 +632,11 @@ class GraspEnv(MujocoEnv, utils.EzPickle):
         self.controller.stay(1000, render=self.render)
         if self.demo_mode:
             self.controller.stay(5000, render=self.render)
+        self.episode_counter += 1
+        self.step_called = 0
         # return an observation image
+        self.desired_goal = self.sample_goal()
+        self._update_goal_state()
         return self.get_observation(show=self.show_observations)
 
     def close(self):

@@ -4,8 +4,8 @@ from pathlib import Path
 from termcolor import colored
 import torch
 
-N_EPISODES = 2  # 1000, running for 2 episodes to test the code
-STEPS_PER_EPISODE = 2  # 50, running for 2 steps to test the code
+N_EPISODES = 1000
+STEPS_PER_EPISODE = 50
 SAVE_WEIGHTS = True
 
 
@@ -19,7 +19,9 @@ def train():
                 n_episodes=N_EPISODES,
                 steps_per_episode=STEPS_PER_EPISODE,
                 number_accumulations_before_update=1,
-                max_possible_samples=12,
+                max_possible_samples=256,
+                memory_size=50000,
+                her_ratio=0.8,
             )
             scene_captured = False
             agent.actor_optimizer.zero_grad()
@@ -27,17 +29,18 @@ def train():
             agent.critic2_optimizer.zero_grad()
 
             for episode in range(1, N_EPISODES + 1):
+                agent.start_new_episode()
                 state = agent.env.reset()
                 if not scene_captured:
                     save_scene_snapshot(
                         agent.env.controller,
                         run_tag,
                         cameras=["top_down_wide", "side"],
-                        width=1280,
-                        height=960,
+                        width=640,
+                        height=480,
                     )
                     scene_captured = True
-                state = agent.transform_observation(state)
+                state_obs = agent.transform_observation(state)
                 print(
                     colored(
                         f"EPISODE {episode}/{N_EPISODES}",
@@ -47,9 +50,7 @@ def train():
                 )
 
                 for step in range(1, STEPS_PER_EPISODE + 1):
-                    print(
-                        "#################################################################"
-                    )
+                    print("#################################################################")
                     print(
                         colored(
                             "EPISODE {} STEP {}".format(episode, step),
@@ -57,28 +58,45 @@ def train():
                             attrs=["bold"],
                         )
                     )
-                    print(
-                        "#################################################################"
-                    )
+                    print("#################################################################")
 
                     # Select action using SAC policy
-                    action, _ = agent.select_action(state, deterministic=False)
+                    action, _ = agent.select_action(state_obs, deterministic=False)
                     env_action = agent.transform_action(action)
                     agent.last_action = "policy"
 
                     next_state, reward, done, _ = agent.env.unwrapped.step(
-                        env_action, record_grasps=True, action_info=agent.last_action
+                        env_action, record_grasps=False, action_info=agent.last_action
                     )
                     agent.update_tensorboard(reward, env_action)
-                    reward = torch.tensor([[reward]])
-                    done = torch.tensor([[done]], dtype=torch.float32)
-                    next_state = agent.transform_observation(next_state)
+                    reward_tensor = torch.tensor([[reward]], dtype=torch.float32)
+                    done_tensor = torch.tensor([[done]], dtype=torch.float32)
+                    next_state_obs = agent.transform_observation(next_state)
 
-                    # Store transition in replay buffer (with done flag)
-                    agent.memory.push(state, action, next_state, reward, done)
+                    agent.store_transition(
+                        state_obs,
+                        action,
+                        next_state_obs,
+                        reward_tensor,
+                        done_tensor,
+                        state,
+                        next_state,
+                    )
 
+                    state_obs = next_state_obs
                     state = next_state
                     agent.learn()
+
+                    if done:
+                        print(
+                            colored(
+                                f"Episode finished early at step {step}",
+                                color="yellow",
+                            )
+                        )
+                        break
+
+                agent.finalize_episode()
 
             if SAVE_WEIGHTS:
                 checkpoint = {
@@ -103,6 +121,7 @@ def train():
                 torch.save(checkpoint, agent.WEIGHT_PATH)
                 # Display relative path from project root
                 from SAC_Agent.SAC_agent import PROJECT_ROOT
+
                 try:
                     relative_path = agent.WEIGHT_PATH.relative_to(PROJECT_ROOT)
                     print("Saved checkpoint to {}.".format(relative_path))

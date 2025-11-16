@@ -90,6 +90,9 @@ class SimWrapper:
         self.data = mujoco.MjData(model)
         self._renderers: Dict[Tuple[int, int], mujoco.Renderer] = {}
 
+    def forward(self):
+        mujoco.mj_forward(self.model, self.data)
+
     def reset(self):
         mujoco.mj_resetData(self.model, self.data)
 
