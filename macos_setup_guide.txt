@@ -10,12 +10,12 @@ PREREQUISITES
 1. Check if Homebrew is installed:
    $ which brew
    $ brew --version
-   
+
    If not installed, install Homebrew from https://brew.sh
 
 2. Install Xcode Command Line Tools (required for compilation):
    $ xcode-select --install
-   
+
    Verify installation:
    $ xcode-select -p
    Should output: /Library/Developer/CommandLineTools
@@ -41,7 +41,7 @@ PYTHON ENVIRONMENT SETUP
 
 2. Install pip dependencies:
    $ pip install -r requirements.txt
-   
+
    Note: This will install mujoco_py, which requires compilation. The first
    installation may take several minutes.
 
@@ -53,21 +53,21 @@ mujoco_py requires GCC 9.x to compile its Cython extensions on macOS.
 
 1. Install GCC 9 using Homebrew:
    $ brew install gcc@9
-   
+
    This installation can take 10-30 minutes as it compiles GCC from source.
 
 2. Set environment variables for compilation:
-   
+
    The system headers need to be accessible during compilation. Set these
    environment variables before running Python scripts:
-   
+
    $ export SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX11.0.sdk
    $ export CPPFLAGS="-I$SDKROOT/usr/include"
    $ export CFLAGS="-I$SDKROOT/usr/include"
-   
+
    To find your SDK path:
    $ xcrun --show-sdk-path
-   
+
    Note: You may need to adjust the SDK version based on your macOS version.
    Available SDKs can be found at:
    /Library/Developer/CommandLineTools/SDKs/
@@ -80,14 +80,14 @@ macOS may block the MuJoCo library due to security restrictions.
 
 1. Remove quarantine attribute from MuJoCo libraries:
    $ xattr -d com.apple.quarantine ~/.mujoco/mujoco210/bin/libmujoco210.dylib
-   
+
    Or remove from all .dylib files:
    $ find ~/.mujoco/mujoco210 -name "*.dylib" -exec xattr -d com.apple.quarantine {} \;
 
 2. If you still get security warnings:
    - Go to System Preferences → Security & Privacy → General
    - Click "Allow Anyway" when prompted
-   
+
    OR temporarily disable Gatekeeper (not recommended for production):
    $ sudo spctl --master-disable
    (Re-enable later with: sudo spctl --master-enable)
@@ -154,6 +154,50 @@ QUICK REFERENCE CHECKLIST
 [ ] example_agent.py runs successfully
 
 
+APPLE SILICON VIA DOCKER (RECOMMENDED WORKAROUND)
+--------------------------------------------------------------------------------
+
+If you're on an Apple Silicon (M1/M2/M3) machine, Homebrew can no longer install
+GCC 9, and mujoco_py's build chain only supports the x86_64 version of MuJoCo. You can run the entire project
+inside a Linux Docker container and avoid installing GCC on macOS altogether.
+
+1. Install Docker Desktop for macOS and enable "Use Rosetta for x86/amd64
+   emulation" in Settings > Features if prompted.
+
+2. From the repo root, build the image targeting linux/amd64:
+
+   $ docker buildx build --platform linux/amd64 -t coms4733-rl .
+
+   (Re-run this command whenever requirements.txt changes.)
+
+3. Provide your MuJoCo license key. The Docker image creates an empty
+   /root/.mujoco/mjkey.txt so mujoco_py can compile, but you should mount your
+   actual key at runtime:
+
+   $ mkdir -p ~/.mujoco && cp /path/to/mjkey.txt ~/.mujoco/mjkey.txt
+
+4. Launch the container and bind-mount the current repo plus your license:
+
+   $ docker run --platform linux/amd64 --rm -it \
+       -v ~/.mujoco/mjkey.txt:/root/.mujoco/mjkey.txt:ro \
+       -v "$(pwd)":/workspace \
+       coms4733-rl bash
+
+   The Dockerfile already installs MuJoCo 2.1.0 and all Python requirements.
+   You're dropped inside /workspace. Run any script exactly like on
+   Linux:
+
+   root@container:/workspace# python example_agent.py
+   root@container:/workspace# MUJOCO_GL=osmesa python SAC_Agent/train.py
+
+Notes:
+- Apple Silicon virtualization emulates x86_64, so builds are slower than on
+  native Linux but require zero macOS toolchain tweaks.
+- Your host files remain owned by you because Docker only writes to the mounted
+  workspace.
+- Update MUJOCO_GL or MODEL_PATH the same way you would outside Docker.
+
+
 NOTES
 --------------------------------------------------------------------------------
 
@@ -172,4 +216,3 @@ NOTES
 ================================================================================
 End of Setup Guide
 ================================================================================
-

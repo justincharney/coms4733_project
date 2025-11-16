@@ -1,0 +1,29 @@
+# Ignore version control metadata
+.git
+.gitignore
+
+# Local editor and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.so
+build/
+dist/
+*.egg-info/
+
+# Local virtual environments and generated assets
+venv/
+.venv/
+Models/
+
+# Large media/checkpoint files
+*.pt
+*.pth
+*.h5
+media/*.gif
+media/*.mp4
