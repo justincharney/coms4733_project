@@ -29,7 +29,7 @@ from Modules import MULTIDISCRETE_RESNET
 HEIGHT = 200
 WIDTH = 200
 N_EPISODES = 1000
-STEPS_PER_EPISODE = 50
+STEPS_PER_EPISODE = 80
 MEMORY_SIZE = 2000
 MAX_POSSIBLE_SAMPLES = 12  # Number of transitions that fits on GPU memory for one backward-call (12 for RGB-D)
 NUMBER_ACCUMULATIONS_BEFORE_UPDATE = (
@@ -42,12 +42,14 @@ GAMMA = 0.0
 LEARNING_RATE = 0.001
 EPS_STEADY = 0.0
 EPS_START = 1.0
-EPS_END = 0.2
-EPS_DECAY = 8000
+EPS_END = 0.05
+EPS_DECAY = 15000
 SAVE_WEIGHTS = True
 MODEL = "RESNET"
 ALGORITHM = "DQN"
 OPTIMIZER = "ADAM"
+USE_HER = True
+HER_FUTURE_K = 4
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -173,6 +175,12 @@ class Grasp_Agent:
         self.WIDTH = width
         self.HEIGHT = height
         self.depth_only = depth_only
+        base_channels = 1 if self.depth_only else 4
+        self.goal_channels = 1
+        self.input_channels = base_channels + self.goal_channels
+        self.goal_blur_sigma = 3.0
+        self.use_her = USE_HER
+        self.her_future_k = HER_FUTURE_K
         if train:
             self.env = gym.make(
                 "gym_grasper:Grasper-v0",
@@ -198,12 +206,13 @@ class Grasp_Agent:
         self.output = self.n_actions_1 * self.n_actions_2
         # Initialize networks
         self.policy_net = MULTIDISCRETE_RESNET(
-            number_actions_dim_2=self.n_actions_2
+            number_actions_dim_2=self.n_actions_2, in_channels=self.input_channels
         ).to(device)
         # Only need a target network if gamma is not zero
         if GAMMA != 0.0:
             self.target_net = MULTIDISCRETE_RESNET(
-                number_actions_dim_2=self.n_actions_2
+                number_actions_dim_2=self.n_actions_2,
+                in_channels=self.input_channels,
             ).to(device)
             # No need for training on target net, we just copy the weigts from policy nets if we use it
             self.target_net.eval()
@@ -325,16 +334,10 @@ class Grasp_Agent:
                 self.random_rotations_successes = defaultdict(int)
             # Tensorboard setup
             self.writer = SummaryWriter(comment=self.DESCRIPTION)
-            if not self.depth_only:
-                self.writer.add_graph(
-                    self.policy_net,
-                    torch.zeros(1, 4, self.WIDTH, self.HEIGHT).to(device),
-                )
-            else:
-                self.writer.add_graph(
-                    self.policy_net,
-                    torch.zeros(1, 1, self.WIDTH, self.HEIGHT).to(device),
-                )
+            sample_input = torch.zeros(
+                1, self.input_channels, self.WIDTH, self.HEIGHT
+            ).to(device)
+            self.writer.add_graph(self.policy_net, sample_input)
             self.last_1000_rewards = deque(maxlen=1000)
             self.last_100_loss = deque(maxlen=100)
             self.last_1000_actions = deque(maxlen=1000)
@@ -465,10 +468,12 @@ class Grasp_Agent:
             )
             depth_tensor = self.standardize_depth(depth_tensor)
 
+        goal_tensor = torch.tensor(self._build_goal_map(observation)).float()
+
         if not self.depth_only:
-            obs_tensor = torch.cat((rgb_tensor, depth_tensor), dim=0)
+            obs_tensor = torch.cat((rgb_tensor, depth_tensor, goal_tensor), dim=0)
         else:
-            obs_tensor = depth_tensor.detach().clone()
+            obs_tensor = torch.cat((depth_tensor, goal_tensor), dim=0)
 
         # Add batch dimension.
         obs_tensor.unsqueeze_(0)
@@ -478,6 +483,37 @@ class Grasp_Agent:
             del depth, depth_tensor
 
         return obs_tensor
+
+    def _build_goal_map(self, observation):
+        goal_map = np.zeros((1, self.HEIGHT, self.WIDTH), dtype=np.float32)
+        desired_goal = observation.get("desired_goal")
+        if desired_goal is None:
+            return goal_map
+
+        goal_world = np.array(desired_goal, dtype=np.float32)
+        try:
+            pixel_x, pixel_y = self.env.controller.world_2_pixel(
+                goal_world,
+                width=self.WIDTH,
+                height=self.HEIGHT,
+                camera="top_down",
+            )
+        except Exception:
+            return goal_map
+
+        pixel_x = int(np.clip(pixel_x, 0, self.WIDTH - 1))
+        pixel_y = int(np.clip(pixel_y, 0, self.HEIGHT - 1))
+        goal_map[0, pixel_y, pixel_x] = 1.0
+        goal_map[0] = cv.GaussianBlur(
+            goal_map[0],
+            (0, 0),
+            sigmaX=self.goal_blur_sigma,
+            sigmaY=self.goal_blur_sigma,
+        )
+        max_val = goal_map[0].max()
+        if max_val > 0:
+            goal_map /= max_val
+        return goal_map
 
     def get_mean_std(self):
         """
@@ -566,7 +602,7 @@ class Grasp_Agent:
 
         self.optimizer.zero_grad()
 
-    def update_tensorboard(self, reward, action):
+    def update_tensorboard(self, reward, action, grasp_success=None):
         """
         Method for keeping track of tensorboard metrics.
 
@@ -638,6 +674,45 @@ class Grasp_Agent:
                     global_step=self.steps_done,
                 )
 
+        if grasp_success is not None and self.steps_done % 10 == 0:
+            self.writer.add_scalar(
+                "Grasp success/raw",
+                grasp_success,
+                global_step=self.steps_done,
+            )
+
+    def apply_her(self, episode_transitions):
+        if not self.use_her or not episode_transitions:
+            return
+
+        env = self.env.unwrapped
+        trajectory_length = len(episode_transitions)
+
+        for idx, transition in enumerate(episode_transitions):
+            achieved_goal = transition["achieved_goal"]
+            for _ in range(self.her_future_k):
+                future_idx = random.randint(idx, trajectory_length - 1)
+                future_goal = episode_transitions[future_idx]["achieved_goal"]
+                her_observation = copy.deepcopy(transition["observation"])
+                her_observation["desired_goal"] = future_goal.copy()
+                her_state = self.transform_observation(her_observation)
+                reward_value = env.compute_reward(achieved_goal, future_goal)
+                reward_tensor = torch.tensor([[reward_value]], dtype=torch.float32)
+                if GAMMA == 0.0:
+                    self.memory.push(
+                        her_state, transition["action"].clone(), reward_tensor
+                    )
+                else:
+                    her_next_observation = copy.deepcopy(transition["next_observation"])
+                    her_next_observation["desired_goal"] = future_goal.copy()
+                    her_next_state = self.transform_observation(her_next_observation)
+                    self.memory.push(
+                        her_state,
+                        transition["action"].clone(),
+                        her_next_state,
+                        reward_tensor,
+                    )
+
 
 def main():
     log_path = setup_run_logging()
@@ -652,7 +727,7 @@ def main():
             scene_captured = False
             agent.optimizer.zero_grad()
             for episode in range(1, N_EPISODES + 1):
-                state = agent.env.reset()
+                observation = agent.env.reset()
                 if not scene_captured:
                     save_scene_snapshot(
                         agent.env.controller,
@@ -662,7 +737,8 @@ def main():
                         height=960,
                     )
                     scene_captured = True
-                state = agent.transform_observation(state)
+                state = agent.transform_observation(observation)
+                episode_transitions = []
                 print(
                     colored(
                         "CURRENT EPSILON: {}".format(agent.eps_threshold),
@@ -686,20 +762,42 @@ def main():
                     )
                     action = agent.epsilon_greedy(state)
                     env_action = agent.transform_action(action)
-                    next_state, reward, done, _ = agent.env.unwrapped.step(
+                    next_observation, reward, done, info = agent.env.unwrapped.step(
                         env_action, record_grasps=True, action_info=agent.last_action
                     )
-                    agent.update_tensorboard(reward, env_action)
-                    reward = torch.tensor([[reward]])
-                    next_state = agent.transform_observation(next_state)
+                    agent.update_tensorboard(
+                        reward, env_action, grasp_success=info.get("grasp_success")
+                    )
+                    reward_tensor = torch.tensor([[reward]], dtype=torch.float32)
+                    next_state = agent.transform_observation(next_observation)
                     if GAMMA == 0.0:
-                        agent.memory.push(state, action, reward)
+                        agent.memory.push(state, action, reward_tensor)
                     else:
-                        agent.memory.push(state, action, next_state, reward)
+                        agent.memory.push(state, action, next_state, reward_tensor)
 
+                    if agent.use_her:
+                        achieved_goal = info.get(
+                            "achieved_goal", next_observation.get("achieved_goal")
+                        )
+                        if achieved_goal is None:
+                            achieved_goal = np.zeros(3, dtype=np.float32)
+                        episode_transitions.append(
+                            {
+                                "observation": copy.deepcopy(observation),
+                                "achieved_goal": np.array(
+                                    achieved_goal, dtype=np.float32
+                                ),
+                                "action": action.detach().clone(),
+                                "next_observation": copy.deepcopy(next_observation),
+                            }
+                        )
+
+                    observation = next_observation
                     state = next_state
 
                     agent.learn()
+
+                agent.apply_her(episode_transitions)
 
             if SAVE_WEIGHTS:
                 torch.save(

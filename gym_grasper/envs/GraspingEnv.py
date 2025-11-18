@@ -17,6 +17,7 @@ import traceback
 from pathlib import Path
 import copy
 from collections import defaultdict
+import random
 from termcolor import colored
 from decorators import *
 from pyquaternion import Quaternion
@@ -40,6 +41,15 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.rotations = {0: 0, 1: 30, 2: 60, 3: 90, 4: -30, 5: -60}
         self.action_space_type = "multidiscrete"
         self.step_called = 0
+        self.goal_tolerance = 0.03
+        self.desired_goal = np.zeros(3, dtype=np.float32)
+        self.last_achieved_goal = np.zeros(3, dtype=np.float32)
+        self.goal_joint_name = None
+        self.target_body_id = None
+        self.object_joint_names = []
+        self.joint_to_body = {}
+        self.last_grasped_object_pose = None
+        self.last_grasped_object_name = None
         utils.EzPickle.__init__(self)
         path = os.path.realpath(__file__)
         path = str(Path(path).parent.parent.parent)
@@ -57,6 +67,7 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.demo_mode = demo
         self.TABLE_HEIGHT = 0.91
         self.render = render
+        self._cache_object_metadata()
 
     def __repr__(self):
         return f"GraspEnv(obs height={self.IMAGE_HEIGHT}, obs_width={self.IMAGE_WIDTH}, AS={self.action_space_type})"
@@ -77,6 +88,12 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
         done = False
         info = {}
+        her_reward = 0.0
+        grasped_something = False
+        goal_before_action = self.desired_goal.copy()
+        achieved_goal = self.last_achieved_goal.copy()
+        if achieved_goal.shape[0] == 0:
+            achieved_goal = np.zeros(3, dtype=np.float32)
         # Parent class will step once during init to set up the observation space, controller is not yet available at that time.
         # Therefore we simply return a dictionary of zeros of the appropriate size.
         if not self.initialized:
@@ -88,10 +105,17 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             self.current_observation["depth"] = np.zeros(
                 (self.IMAGE_WIDTH, self.IMAGE_HEIGHT)
             )
+            self.current_observation["desired_goal"] = self.desired_goal.copy()
+            self.current_observation["achieved_goal"] = self.last_achieved_goal.copy()
             reward = 0
         else:
             if self.step_called == 1:
                 self.current_observation = self.get_observation(show=False)
+            self._refresh_desired_goal()
+            goal_before_action = self.desired_goal.copy()
+            achieved_goal = self._get_end_effector_position()
+            self.last_grasped_object_pose = None
+            self.last_grasped_object_name = None
 
             if self.action_space_type == "discrete":
                 x = action % self.IMAGE_WIDTH
@@ -112,7 +136,6 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                 height=self.IMAGE_HEIGHT,
                 width=self.IMAGE_WIDTH,
             )
-
             print(
                 colored(
                     "Action ({}): Pixel X: {}, Pixel Y: {}, Rotation: {} ({} deg)".format(
@@ -140,7 +163,7 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                     )
                 )
                 # Binary reward
-                reward = 0
+                reward = 0.0
 
             else:
                 grasped_something = self.move_and_grasp(
@@ -151,19 +174,40 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                     markers=markers,
                 )
 
-                reward = 1 if grasped_something else 0
-                if grasped_something != "demo":
-                    print(
-                        colored(
-                            "Reward received during step: {}".format(reward),
-                            color="yellow",
-                            attrs=["bold"],
-                        )
+            if grasped_something:
+                if self.last_grasped_object_pose is None:
+                    _, detected_pos = self._detect_object_close_to_gripper(
+                        distance_threshold=0.08
                     )
+                    if detected_pos is not None:
+                        self.last_grasped_object_pose = detected_pos.copy()
+                if self.last_grasped_object_pose is not None:
+                    achieved_goal = self.last_grasped_object_pose.copy()
+                else:
+                    achieved_goal = self._get_end_effector_position()
+            else:
+                achieved_goal = self._get_end_effector_position()
+
+            self.last_achieved_goal = achieved_goal
+            her_reward = float(self.compute_reward(achieved_goal, goal_before_action))
+            reward = her_reward
+            if self.initialized:
+                print(
+                    colored(
+                        "Reward received during step: {}".format(reward),
+                        color="yellow",
+                        attrs=["bold"],
+                    )
+                )
 
             self.current_observation = self.get_observation(show=self.show_observations)
 
         self.step_called += 1
+        info["desired_goal"] = goal_before_action.copy()
+        info["achieved_goal"] = self.last_achieved_goal.copy()
+        info["is_success"] = her_reward
+        info["her_reward"] = her_reward
+        info["grasp_success"] = 1.0 if grasped_something else 0.0
 
         return self.current_observation, reward, done, info
 
@@ -298,6 +342,8 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                 result_grasp = self.controller.grasp(
                     render=render, quiet=True, marker=markers, plot=plot
                 )
+                if result_grasp:
+                    self._capture_grasp_snapshot()
 
         self.controller.actuators[0][4].Kp = 10.0
 
@@ -345,6 +391,9 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             final_str = "Object in the gripper"
 
         grasped_something = result_final[:3] == "max" and result_grasp
+        if not grasped_something:
+            self.last_grasped_object_pose = None
+            self.last_grasped_object_name = None
 
         if grasped_something and record_grasps:
             capture_rgb, depth = self.controller.get_image_data(
@@ -432,6 +481,8 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             show: If True, displays the observation in a cv2 window.
         """
 
+        self._refresh_desired_goal()
+
         rgb, depth = self.controller.get_image_data(
             width=self.IMAGE_WIDTH, height=self.IMAGE_HEIGHT, show=show
         )
@@ -439,6 +490,8 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         observation = defaultdict()
         observation["rgb"] = rgb
         observation["depth"] = depth
+        observation["desired_goal"] = self.desired_goal.copy()
+        observation["achieved_goal"] = self.last_achieved_goal.copy()
 
         return observation
 
@@ -462,12 +515,13 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             0.3,
         ]
 
-        object_joint_names = sorted(
-            (name for name in self.model.joint_names if name.startswith("free_joint_")),
-            key=lambda name: int(name.split("_")[-1]),
-        )
+        self.object_joint_names = self._gather_object_joint_names()
+        try:
+            self.ee_body_id = self.model.body_name2id("ee_link")
+        except ValueError:
+            self.ee_body_id = None
 
-        for joint_name in object_joint_names:
+        for joint_name in self.object_joint_names:
             q_adr = self.model.get_joint_qpos_addr(joint_name)
             start, end = q_adr
             qpos[start] = np.random.uniform(low=-0.25, high=0.25)
@@ -475,6 +529,7 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             # qpos[start+2] = 1.0
             qpos[start + 2] = np.random.uniform(low=1.0, high=1.5)
             qpos[start + 3 : end] = Quaternion.random().unit.elements
+        self._set_new_goal(qpos)
 
         #########################################################################
         # Reset for IT4, older versions of IT5
@@ -520,8 +575,104 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.controller.stay(1000, render=self.render)
         if self.demo_mode:
             self.controller.stay(5000, render=self.render)
+        self.last_grasped_object_pose = None
+        self.last_grasped_object_name = None
+        self.last_achieved_goal = self._get_end_effector_position()
         # return an observation image
         return self.get_observation(show=self.show_observations)
+
+    def _set_new_goal(self, qpos):
+        if not self.object_joint_names:
+            self.goal_joint_name = None
+            self.desired_goal = np.zeros(3, dtype=np.float32)
+            self.last_achieved_goal = np.zeros(3, dtype=np.float32)
+            return
+
+        self.goal_joint_name = random.choice(self.object_joint_names)
+        self.desired_goal = self._goal_from_qpos(self.goal_joint_name, qpos)
+        self.target_body_id = self.joint_to_body.get(self.goal_joint_name)
+        # Default achieved goal above table center
+        self.last_achieved_goal = np.array([0.0, -0.6, self.TABLE_HEIGHT], dtype=np.float32)
+
+    def _goal_from_qpos(self, joint_name, qpos):
+        q_adr = self.model.get_joint_qpos_addr(joint_name)
+        start, _ = q_adr
+        return np.array(
+            [qpos[start], qpos[start + 1], qpos[start + 2]],
+            dtype=np.float32,
+        )
+
+    def compute_reward(self, achieved_goal, desired_goal):
+        achieved_goal = np.array(achieved_goal, dtype=np.float32)
+        desired_goal = np.array(desired_goal, dtype=np.float32)
+        distance = np.linalg.norm(achieved_goal[:2] - desired_goal[:2])
+        return 1.0 if distance <= self.goal_tolerance else 0.0
+
+    def _cache_object_metadata(self):
+        if not hasattr(self, "model"):
+            return
+        self.object_joint_names = self._gather_object_joint_names()
+        self.joint_to_body = {}
+        for joint_name in self.object_joint_names:
+            try:
+                joint_id = self.model.joint_name2id(joint_name)
+            except ValueError:
+                continue
+            body_id = self.model.jnt_bodyid[joint_id]
+            self.joint_to_body[joint_name] = body_id
+
+    def _gather_object_joint_names(self):
+        joint_names = [
+            name for name in self.model.joint_names if name.startswith("free_joint_")
+        ]
+        joint_names.sort(key=lambda name: self._joint_index(name))
+        return joint_names
+
+    @staticmethod
+    def _joint_index(name):
+        try:
+            return int(name.split("_")[-1])
+        except (ValueError, IndexError):
+            return name
+
+    def _refresh_desired_goal(self):
+        if self.goal_joint_name is None:
+            self.desired_goal = np.zeros(3, dtype=np.float32)
+            self.target_body_id = None
+            return
+        self.target_body_id = self.joint_to_body.get(self.goal_joint_name)
+        if self.target_body_id is None:
+            self.desired_goal = np.zeros(3, dtype=np.float32)
+            return
+        self.desired_goal = self._goal_from_qpos(
+            self.goal_joint_name, self.data.qpos
+        )
+
+    def _get_end_effector_position(self):
+        if self.ee_body_id is None:
+            self.ee_body_id = self.model.body_name2id("ee_link")
+        return np.array(self.sim.data.body_xpos[self.ee_body_id], dtype=np.float32)
+
+    def _detect_object_close_to_gripper(self, distance_threshold=0.05):
+        if not self.object_joint_names:
+            return None, None
+        ee_pos = self._get_end_effector_position()
+        closest_name = None
+        closest_pos = None
+        min_dist = float("inf")
+        for joint_name in self.object_joint_names:
+            pos = self._goal_from_qpos(joint_name, self.data.qpos)
+            dist = np.linalg.norm(pos[:2] - ee_pos[:2])
+            if dist < distance_threshold and dist < min_dist:
+                closest_name = joint_name
+                closest_pos = pos.copy()
+                min_dist = dist
+        return closest_name, closest_pos
+
+    def _capture_grasp_snapshot(self):
+        name, pos = self._detect_object_close_to_gripper(distance_threshold=0.08)
+        self.last_grasped_object_name = name
+        self.last_grasped_object_pose = pos.copy() if pos is not None else None
 
     def close(self):
         mujoco_env.MujocoEnv.close(self)

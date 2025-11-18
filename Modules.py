@@ -157,10 +157,10 @@ def conv3x3(in_planes, out_planes, stride=1, groups=1, dilation=1):
 
 
 class Perception_Module(nn.Module):
-    def __init__(self):
+    def __init__(self, in_channels=4):
         super(Perception_Module, self).__init__()
         # self.C1 = conv3x3(1, 64)
-        self.C1 = conv3x3(4, 64)
+        self.C1 = conv3x3(in_channels, 64)
         self.MP1 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
         self.RB1 = BasicBlock(64, 128)
         self.MP2 = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
@@ -305,9 +305,10 @@ def POLICY_RESNET():
     return nn.Sequential(Perception_Module(), Grasping_Module(output_activation=None))
 
 
-def MULTIDISCRETE_RESNET(number_actions_dim_2):
+def MULTIDISCRETE_RESNET(number_actions_dim_2, in_channels=4):
     return nn.Sequential(
-        Perception_Module(), Grasping_Module_multidiscrete(act_dim_2=number_actions_dim_2)
+        Perception_Module(in_channels=in_channels),
+        Grasping_Module_multidiscrete(act_dim_2=number_actions_dim_2),
     )
 
 
