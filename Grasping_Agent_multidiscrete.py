@@ -181,6 +181,7 @@ class Grasp_Agent:
         self.goal_blur_sigma = 3.0
         self.use_her = USE_HER
         self.her_future_k = HER_FUTURE_K
+        self.goal_heatmap_example_saved = False
         if train:
             self.env = gym.make(
                 "gym_grasper:Grasper-v0",
@@ -515,6 +516,30 @@ class Grasp_Agent:
             goal_map /= max_val
         return goal_map
 
+    def maybe_save_goal_heatmap_example(self, observation, path="renders/goal_heatmap_example.png"):
+        if self.goal_heatmap_example_saved:
+            return
+        goal_map = self._build_goal_map(observation)[0]
+        heatmap = (goal_map * 255).astype(np.uint8)
+        colored_map = cv.applyColorMap(heatmap, cv.COLORMAP_JET)
+        rgb = observation.get("rgb")
+        if rgb is None:
+            rgb = np.zeros_like(colored_map)
+        if rgb.shape[:2] != colored_map.shape[:2]:
+            colored_map = cv.resize(colored_map, (rgb.shape[1], rgb.shape[0]))
+        overlay = cv.addWeighted(rgb, 0.6, colored_map, 0.4, 0)
+        directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
+        cv.imwrite(path, overlay)
+        print(
+            colored(
+                f"Saved goal heatmap example to {path}",
+                color="green",
+                attrs=["bold"],
+            )
+        )
+        self.goal_heatmap_example_saved = True
+
     def get_mean_std(self):
         """
         Reads and returns the mean and standard deviation values created by 'normalize.py'.
@@ -683,10 +708,12 @@ class Grasp_Agent:
 
     def apply_her(self, episode_transitions):
         if not self.use_her or not episode_transitions:
-            return
+            return 0, 0
 
         env = self.env.unwrapped
         trajectory_length = len(episode_transitions)
+        total_added = 0
+        positive_added = 0
 
         for idx, transition in enumerate(episode_transitions):
             achieved_goal = transition["achieved_goal"]
@@ -712,6 +739,11 @@ class Grasp_Agent:
                         her_next_state,
                         reward_tensor,
                     )
+                total_added += 1
+                if reward_value > 0.0:
+                    positive_added += 1
+
+        return total_added, positive_added
 
 
 def main():
@@ -728,6 +760,7 @@ def main():
             agent.optimizer.zero_grad()
             for episode in range(1, N_EPISODES + 1):
                 observation = agent.env.reset()
+                agent.maybe_save_goal_heatmap_example(observation)
                 if not scene_captured:
                     save_scene_snapshot(
                         agent.env.controller,
@@ -781,6 +814,7 @@ def main():
                         )
                         if achieved_goal is None:
                             achieved_goal = np.zeros(3, dtype=np.float32)
+                        grasped = bool(info.get("grasp_success", 0.0))
                         episode_transitions.append(
                             {
                                 "observation": copy.deepcopy(observation),
@@ -789,7 +823,14 @@ def main():
                                 ),
                                 "action": action.detach().clone(),
                                 "next_observation": copy.deepcopy(next_observation),
+                                "grasped": grasped,
                             }
+                        )
+                        print(
+                            colored(
+                                f"[HER] cached step {step} (grasped={grasped})",
+                                color="cyan",
+                            )
                         )
 
                     observation = next_observation
@@ -797,7 +838,23 @@ def main():
 
                     agent.learn()
 
-                agent.apply_her(episode_transitions)
+                her_total, her_positive = agent.apply_her(episode_transitions)
+                if her_total > 0:
+                    agent.writer.add_scalar(
+                        "HER/relabeled_samples", her_total, global_step=agent.steps_done
+                    )
+                    agent.writer.add_scalar(
+                        "HER/positive_samples",
+                        her_positive,
+                        global_step=agent.steps_done,
+                    )
+                    print(
+                        colored(
+                            f"[HER] relabeled {her_total} transitions ({her_positive} positive)",
+                            color="magenta",
+                            attrs=["bold"],
+                        )
+                    )
 
             if SAVE_WEIGHTS:
                 torch.save(
