@@ -1,4 +1,4 @@
-mujoco_py
+mujoco
 numpy==1.23.5
 simple_pid
 termcolor

@@ -9,10 +9,10 @@ import time
 import math
 import cv2 as cv
 import numpy as np
-import mujoco_py
-from gym.envs.mujoco import mujoco_env
+import mujoco as mj
+import gym
 from gym import utils, spaces
-from gym_grasper.controller.MujocoController import MJ_Controller
+from gym_grasper.controller.MujocoController import MJ_Controller, MjSimWrapper, DummyViewer
 import traceback
 from pathlib import Path
 import copy
@@ -23,7 +23,7 @@ from decorators import *
 from pyquaternion import Quaternion
 
 
-class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
+class GraspEnv(gym.Env, utils.EzPickle):
     # def __init__(self, file='/UR5+gripper/UR5gripper_2_finger.xml', image_width=200, image_height=200, show_obs=True, demo=False, render=False):
     # def __init__(self, file='/UR5+gripper/UR5gripper_2_finger.xml', image_width=200, image_height=200, show_obs=True, demo=False, render=False):
     def __init__(
@@ -50,27 +50,72 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.joint_to_body = {}
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
-        utils.EzPickle.__init__(self)
+        utils.EzPickle.__init__(self, file, image_width, image_height, show_obs, demo, render)
         path = os.path.realpath(__file__)
         path = str(Path(path).parent.parent.parent)
         full_path = path + file
-        mujoco_env.MujocoEnv.__init__(self, full_path, 1)
-        if render:
-            # render once to initialize a viewer object
-            self.render()
-        self.controller = MJ_Controller(
-            self.model, self.sim, self.viewer if render else False
-        )
+        self.model = mj.MjModel.from_xml_path(full_path)
+        self.sim = MjSimWrapper(self.model)
+        self.data = self.sim.data
+        self.frame_skip = 1
+        self.dt = self.model.opt.timestep * self.frame_skip
+        self.metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": int(np.round(1 / self.dt))}
+        self.viewer = DummyViewer() if render else None
+        self.controller = MJ_Controller(self.model, self.sim, self.viewer if render else False)
         self.initialized = True
         self.grasp_counter = 0
         self.show_observations = show_obs
         self.demo_mode = demo
         self.TABLE_HEIGHT = 0.91
-        self.render = render
+        self.render_enabled = render
         self._cache_object_metadata()
+        self._set_action_space()
+        self.observation_space = spaces.Dict(
+            {
+                "rgb": spaces.Box(
+                    low=0,
+                    high=255,
+                    shape=(self.IMAGE_HEIGHT, self.IMAGE_WIDTH, 3),
+                    dtype=np.uint8,
+                ),
+                "depth": spaces.Box(
+                    low=0.0,
+                    high=np.finfo(np.float32).max,
+                    shape=(self.IMAGE_HEIGHT, self.IMAGE_WIDTH),
+                    dtype=np.float32,
+                ),
+                "desired_goal": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32
+                ),
+                "achieved_goal": spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32
+                ),
+            }
+        )
 
     def __repr__(self):
         return f"GraspEnv(obs height={self.IMAGE_HEIGHT}, obs_width={self.IMAGE_WIDTH}, AS={self.action_space_type})"
+
+    def reset(self, *, seed=None, options=None):
+        if seed is not None:
+            self.np_random, _ = utils.seeding.np_random(seed)
+        self.step_called = 0
+        observation = self.reset_model(show_obs=self.show_observations)
+        self.current_observation = observation
+        return observation
+
+    def set_state(self, qpos, qvel):
+        self.data.qpos[:] = qpos
+        self.data.qvel[:] = qvel
+        mj.mj_forward(self.model, self.data)
+
+    def render(self, mode="human"):
+        rgb, _ = self.controller.get_image_data(
+            width=self.IMAGE_WIDTH, height=self.IMAGE_HEIGHT, show=False
+        )
+        if mode == "rgb_array":
+            return rgb
+        return None
 
     def step(self, action, record_grasps=False, markers=False, action_info="no info"):
         """
@@ -100,10 +145,10 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
             # self.current_observation = np.zeros((200,200,4))
             self.current_observation = defaultdict()
             self.current_observation["rgb"] = np.zeros(
-                (self.IMAGE_WIDTH, self.IMAGE_HEIGHT, 3)
+                (self.IMAGE_HEIGHT, self.IMAGE_WIDTH, 3)
             )
             self.current_observation["depth"] = np.zeros(
-                (self.IMAGE_WIDTH, self.IMAGE_HEIGHT)
+                (self.IMAGE_HEIGHT, self.IMAGE_WIDTH)
             )
             self.current_observation["desired_goal"] = self.desired_goal.copy()
             self.current_observation["achieved_goal"] = self.last_achieved_goal.copy()
@@ -169,7 +214,7 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
                 grasped_something = self.move_and_grasp(
                     coordinates,
                     rotation,
-                    render=self.render,
+                    render=self.render_enabled,
                     record_grasps=record_grasps,
                     markers=markers,
                 )
@@ -249,7 +294,7 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
     def rotate_wrist_3_joint_to_value(self, degrees):
         self.controller.current_target_joint_values[5] = math.radians(degrees)
         return self.controller.move_group_to_joint_target(
-            tolerance=0.05, max_steps=500, render=self.render, quiet=True
+            tolerance=0.05, max_steps=500, render=self.render_enabled, quiet=True
         )
 
     def transform_height(self, height_action, depth_height):
@@ -517,13 +562,12 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
         self.object_joint_names = self._gather_object_joint_names()
         try:
-            self.ee_body_id = self.model.body_name2id("ee_link")
+            self.ee_body_id = self.controller.body_name2id("ee_link")
         except ValueError:
             self.ee_body_id = None
 
         for joint_name in self.object_joint_names:
-            q_adr = self.model.get_joint_qpos_addr(joint_name)
-            start, end = q_adr
+            start, end = self.controller.get_joint_qpos_addr(joint_name)
             qpos[start] = np.random.uniform(low=-0.25, high=0.25)
             qpos[start + 1] = np.random.uniform(low=-0.77, high=-0.43)
             # qpos[start+2] = 1.0
@@ -572,9 +616,9 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         )
 
         # Turn this on for training, so the objects drop down before the observation
-        self.controller.stay(1000, render=self.render)
+        self.controller.stay(1000, render=self.render_enabled)
         if self.demo_mode:
-            self.controller.stay(5000, render=self.render)
+            self.controller.stay(5000, render=self.render_enabled)
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
         self.last_achieved_goal = self._get_end_effector_position()
@@ -595,8 +639,7 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.last_achieved_goal = np.array([0.0, -0.6, self.TABLE_HEIGHT], dtype=np.float32)
 
     def _goal_from_qpos(self, joint_name, qpos):
-        q_adr = self.model.get_joint_qpos_addr(joint_name)
-        start, _ = q_adr
+        start, _ = self.controller.get_joint_qpos_addr(joint_name)
         return np.array(
             [qpos[start], qpos[start + 1], qpos[start + 2]],
             dtype=np.float32,
@@ -615,16 +658,18 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.joint_to_body = {}
         for joint_name in self.object_joint_names:
             try:
-                joint_id = self.model.joint_name2id(joint_name)
+                joint_id = self.controller.joint_name2id(joint_name)
             except ValueError:
                 continue
             body_id = self.model.jnt_bodyid[joint_id]
             self.joint_to_body[joint_name] = body_id
 
     def _gather_object_joint_names(self):
-        joint_names = [
-            name for name in self.model.joint_names if name.startswith("free_joint_")
-        ]
+        joint_names = []
+        for i in range(self.model.njnt):
+            name = self.controller.joint_id2name(i)
+            if name.startswith("free_joint_"):
+                joint_names.append(name)
         joint_names.sort(key=lambda name: self._joint_index(name))
         return joint_names
 
@@ -650,8 +695,8 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
 
     def _get_end_effector_position(self):
         if self.ee_body_id is None:
-            self.ee_body_id = self.model.body_name2id("ee_link")
-        return np.array(self.sim.data.body_xpos[self.ee_body_id], dtype=np.float32)
+            self.ee_body_id = self.controller.body_name2id("ee_link")
+        return np.array(self.sim.data.xpos[self.ee_body_id], dtype=np.float32)
 
     def _detect_object_close_to_gripper(self, distance_threshold=0.05):
         if not self.object_joint_names:
@@ -675,7 +720,11 @@ class GraspEnv(mujoco_env.MujocoEnv, utils.EzPickle):
         self.last_grasped_object_pose = pos.copy() if pos is not None else None
 
     def close(self):
-        mujoco_env.MujocoEnv.close(self)
+        if hasattr(self.controller, "viewer") and self.controller.viewer is not None:
+            try:
+                self.controller.viewer.close()
+            except Exception:
+                pass
         try:
             cv.destroyAllWindows()
         except cv.error:

@@ -13,8 +13,11 @@ The key is:
 
 import os
 
-# IMPORTANT: Set this BEFORE importing mujoco_py or gym
-os.environ["MUJOCO_GL"] = "osmesa"
+# IMPORTANT: Set this BEFORE importing mujoco or gym
+if "MUJOCO_GL" not in os.environ:
+    # Prefer EGL on Linux servers and GLFW on macOS; osmesa is not available in
+    # the default macOS wheels for mujoco.
+    os.environ["MUJOCO_GL"] = "egl" if os.uname().sysname != "Darwin" else "glfw"
 
 import gym
 import numpy as np

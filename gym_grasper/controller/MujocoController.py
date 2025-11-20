@@ -5,9 +5,9 @@
 from collections import defaultdict
 import os
 from pathlib import Path
-import mujoco_py as mp
 import time
 import numpy as np
+import mujoco as mj
 from simple_pid import PID
 from termcolor import colored
 from ikpy.chain import Chain
@@ -16,6 +16,96 @@ import cv2 as cv
 import matplotlib.pyplot as plt
 import copy
 from decorators import debug
+
+
+class DummyViewer:
+    """Minimal viewer stub to keep marker/render calls no-ops in headless mode."""
+
+    def render(self):
+        return None
+
+    def add_marker(self, *args, **kwargs):  # noqa: D401 - matches mujoco-py API
+        return None
+
+    def close(self):
+        return None
+
+
+class MjSimWrapper:
+    """
+    Light-weight compatibility wrapper replicating mujoco_py.MjSim on top of the
+    official mujoco bindings. Provides the attributes and methods used across
+    the project (data, model, step, forward, render).
+    """
+
+    def __init__(self, model):
+        self.model = model
+        self.data = mj.MjData(model)
+        self._renderers = {}
+        self._depth_renderers = {}
+
+    def step(self):
+        mj.mj_step(self.model, self.data)
+
+    def forward(self):
+        mj.mj_forward(self.model, self.data)
+
+    def render(self, width=200, height=200, camera_name=None, depth=False):
+        """
+        Render the current scene using the official mujoco.Renderer.
+        Caches separate renderers for RGB and depth to avoid toggling settings.
+        Returns zero arrays if the underlying GL context cannot be created.
+        """
+
+        # Cache key includes the camera selector (name or id) to avoid sharing scenes across views.
+        camera_selector = -1
+        if camera_name is not None:
+            try:
+                camera_selector = mj.mj_name2id(
+                    self.model, mj.mjtObj.mjOBJ_CAMERA, camera_name
+                )
+            except Exception:
+                camera_selector = camera_name
+
+        key = (width, height, camera_selector)
+        empty_rgb = np.zeros((height, width, 3), dtype=np.uint8)
+        empty_depth = np.zeros((height, width), dtype=np.float32)
+
+        def fetch_renderer(cache, enable_depth=False):
+            renderer = cache.get(key)
+            if renderer is None and not getattr(self, "_render_unavailable", False):
+                try:
+                    renderer = mj.Renderer(self.model, height=height, width=width)
+                    if enable_depth:
+                        renderer.enable_depth_rendering()
+                    cache[key] = renderer
+                except Exception as exc:
+                    print(
+                        colored(
+                            f"Renderer unavailable (falling back to blank frames): {exc}",
+                            color="red",
+                        )
+                    )
+                    self._render_unavailable = True
+                    renderer = None
+            return renderer
+
+        renderer = fetch_renderer(self._renderers, enable_depth=False)
+        if renderer is None:
+            return (empty_rgb, empty_depth) if depth else empty_rgb
+
+        renderer.update_scene(self.data, camera=camera_selector)
+        rgb = renderer.render()
+        if not depth:
+            return rgb
+
+        depth_renderer = fetch_renderer(self._depth_renderers, enable_depth=True)
+        if depth_renderer is None:
+            return empty_rgb, empty_depth
+
+        depth_renderer.update_scene(self.data, camera=camera_selector)
+        depth_img = depth_renderer.render()
+        return rgb, depth_img
 
 
 class MJ_Controller(object):
@@ -29,18 +119,18 @@ class MJ_Controller(object):
     def __init__(self, model=None, simulation=None, viewer=None):
         path = os.path.realpath(__file__)
         path = str(Path(path).parent.parent.parent)
-        if model is None:
-            self.model = mp.load_model_from_path(
-                path + "/UR5+gripper/UR5gripper_2_finger.xml"
-            )
-        else:
-            self.model = model
-        self.sim = mp.MjSim(self.model) if simulation is None else simulation
-        # Handle viewer: None = auto-create, False = headless mode, otherwise use provided
-        if viewer is None:
-            self.viewer = mp.MjViewer(self.sim)
-        elif viewer is False:
+        self.model = (
+            mj.MjModel.from_xml_path(path + "/UR5+gripper/UR5gripper_2_finger.xml")
+            if model is None
+            else model
+        )
+        self.sim = simulation if simulation is not None else MjSimWrapper(self.model)
+        self.depth_is_metric = isinstance(self.sim, MjSimWrapper)
+        # Handle viewer: None -> headless-friendly dummy, False -> no viewer, any other object gets used directly.
+        if viewer is False:
             self.viewer = None
+        elif viewer is None:
+            self.viewer = DummyViewer()
         else:
             self.viewer = viewer
         self.create_lists()
@@ -76,7 +166,53 @@ class MJ_Controller(object):
         self.cam_matrix = None
         self.cam_init = False
         self.last_movement_steps = 0
+        self._render_unavailable = False
         # self.move_group_to_joint_target()
+
+    def _id2name(self, obj_type, idx):
+        name = mj.mj_id2name(self.model, obj_type, idx)
+        return name if name is not None else str(idx)
+
+    def body_name2id(self, name):
+        return mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_BODY, name)
+
+    def body_id2name(self, idx):
+        return self._id2name(mj.mjtObj.mjOBJ_BODY, idx)
+
+    def joint_name2id(self, name):
+        return mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_JOINT, name)
+
+    def joint_id2name(self, idx):
+        return self._id2name(mj.mjtObj.mjOBJ_JOINT, idx)
+
+    def actuator_id2name(self, idx):
+        return self._id2name(mj.mjtObj.mjOBJ_ACTUATOR, idx)
+
+    def camera_id2name(self, idx):
+        return self._id2name(mj.mjtObj.mjOBJ_CAMERA, idx)
+
+    def camera_name2id(self, name):
+        return mj.mj_name2id(self.model, mj.mjtObj.mjOBJ_CAMERA, name)
+
+    def get_joint_qpos_addr(self, joint_name):
+        """Return (start, end) indices into qpos for a joint, mirroring mujoco-py helper."""
+
+        joint_id = self.joint_name2id(joint_name)
+        start = int(self.model.jnt_qposadr[joint_id])
+        joint_type = int(self.model.jnt_type[joint_id])
+        if joint_type == mj.mjtJoint.mjJNT_FREE:
+            width = 7
+        elif joint_type == mj.mjtJoint.mjJNT_BALL:
+            width = 4
+        else:
+            width = 1
+        return start, start + width
+
+    def get_joint_qpos(self, joint_name):
+        """Fetch qpos slice for a joint name."""
+
+        start, end = self.get_joint_qpos_addr(joint_name)
+        return self.sim.data.qpos[start:end]
 
     def create_group(self, group_name, idx_list):
         """
@@ -115,13 +251,13 @@ class MJ_Controller(object):
 
         print("\nNumber of bodies: {}".format(self.model.nbody))
         for i in range(self.model.nbody):
-            print("Body ID: {}, Body Name: {}".format(i, self.model.body_id2name(i)))
+            print("Body ID: {}, Body Name: {}".format(i, self.body_id2name(i)))
 
         print("\nNumber of joints: {}".format(self.model.njnt))
         for i in range(self.model.njnt):
             print(
                 "Joint ID: {}, Joint Name: {}, Limits: {}".format(
-                    i, self.model.joint_id2name(i), self.model.jnt_range[i]
+                    i, self.joint_id2name(i), self.model.jnt_range[i]
                 )
             )
 
@@ -130,7 +266,7 @@ class MJ_Controller(object):
             print(
                 "Actuator ID: {}, Actuator Name: {}, Controlled Joint: {}, Control Range: {}".format(
                     i,
-                    self.model.actuator_id2name(i),
+                    self.actuator_id2name(i),
                     self.actuators[i][3],
                     self.model.actuator_ctrlrange[i],
                 )
@@ -160,7 +296,7 @@ class MJ_Controller(object):
             print(
                 "Camera ID: {}, Camera Name: {}, Camera FOV (y, degrees): {}, Position: {}, Orientation: {}".format(
                     i,
-                    self.model.camera_id2name(i),
+                    self.camera_id2name(i),
                     self.model.cam_fovy[i],
                     self.model.cam_pos0[i],
                     self.model.cam_mat0[i],
@@ -281,9 +417,9 @@ class MJ_Controller(object):
         self.current_output = [controller(0) for controller in self.controller_list]
         self.actuators = []
         for i in range(len(self.sim.data.ctrl)):
-            item = [i, self.model.actuator_id2name(i)]
-            item.append(self.model.actuator_trnid[i][0])
-            item.append(self.model.joint_id2name(self.model.actuator_trnid[i][0]))
+            item = [i, self.actuator_id2name(i)]
+            item.append(int(self.model.actuator_trnid[i][0]))
+            item.append(self.joint_id2name(int(self.model.actuator_trnid[i][0])))
             item.append(self.controller_list[i])
             self.actuators.append(item)
 
@@ -380,7 +516,7 @@ class MJ_Controller(object):
                 if plot and steps % 2 == 0:
                     self.fill_plot_list(group, steps)
 
-                temp = self.sim.data.body_xpos[self.model.body_name2id("ee_link")] - [
+                temp = self.sim.data.xpos[self.body_name2id("ee_link")] - [
                     0,
                     -0.005,
                     0.16,
@@ -532,7 +668,7 @@ class MJ_Controller(object):
             # base link. This is because the inverse kinematics solver chain starts at the base link.
             ee_position_base = (
                 ee_position
-                - self.sim.data.body_xpos[self.model.body_name2id("base_link")]
+                - self.sim.data.xpos[self.body_name2id("base_link")]
             )
 
             # By adding the appr. distance between ee_link and grasp center, we can now specify a world target position
@@ -543,7 +679,7 @@ class MJ_Controller(object):
             # Use the current joint configuration as the IK seed to satisfy joint limits.
             initial_position = [0.0]
             for idx, joint_name in enumerate(self._ik_joint_names):
-                qpos = self.sim.data.get_joint_qpos(joint_name)
+                qpos = self.get_joint_qpos(joint_name)
                 # get_joint_qpos returns a numpy array for hinge joints
                 current_value = float(np.atleast_1d(qpos)[0])
                 lower, upper = self._ik_joint_limits[idx]
@@ -562,7 +698,7 @@ class MJ_Controller(object):
 
             prediction = (
                 self.ee_chain.forward_kinematics(joint_angles)[:3, 3]
-                + self.sim.data.body_xpos[self.model.body_name2id("base_link")]
+                + self.sim.data.xpos[self.body_name2id("base_link")]
                 - [0, -0.005, 0.16]
             )
             diff = abs(prediction - ee_position)
@@ -583,7 +719,7 @@ class MJ_Controller(object):
         TODO: Implement orientation.
         """
         target_position = pose_target[:3]
-        target_position -= self.sim.data.body_xpos[self.model.body_name2id("base_link")]
+        target_position -= self.sim.data.xpos[self.body_name2id("base_link")]
         orientation = Quaternion(pose_target[3:])
         target_orientation = orientation.rotation_matrix
         target_matrix = orientation.transformation_matrix
@@ -619,10 +755,10 @@ class MJ_Controller(object):
         print("################################################")
         for i in range(len(self.model.jnt_qposadr)):
             # for i in range(self.model.njnt):
-            name = self.model.joint_id2name(i)
+            name = self.joint_id2name(i)
             print(
                 "Current angle for joint {}: {}".format(
-                    name, self.sim.data.get_joint_qpos(name)
+                    name, self.get_joint_qpos(name)
                 )
             )
             # print('Current angle for joint {}: {}'.format(self.model.joint_id2name(i), self.sim.data.qpos[i]))
@@ -633,7 +769,7 @@ class MJ_Controller(object):
         for i in range(self.model.nbody):
             print(
                 "Current position for body {}: {}".format(
-                    self.model.body_id2name(i), self.sim.data.body_xpos[i]
+                    self.body_id2name(i), self.sim.data.xpos[i]
                 )
             )
 
@@ -643,7 +779,7 @@ class MJ_Controller(object):
         for i in range(self.model.nbody):
             print(
                 "Current rotation for body {}: {}".format(
-                    self.model.body_id2name(i), self.sim.data.body_xmat[i]
+                    self.body_id2name(i), self.sim.data.xmat[i]
                 )
             )
 
@@ -653,7 +789,7 @@ class MJ_Controller(object):
         for i in range(self.model.nbody):
             print(
                 "Current rotation for body {}: {}".format(
-                    self.model.body_id2name(i), self.sim.data.body_xquat[i]
+                    self.body_id2name(i), self.sim.data.xquat[i]
                 )
             )
 
@@ -786,6 +922,9 @@ class MJ_Controller(object):
         rgb, depth = copy.deepcopy(
             self.sim.render(width=width, height=height, camera_name=camera, depth=True)
         )
+        rgb = np.asarray(rgb)
+        if rgb.dtype != np.uint8:
+            rgb = (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
         if show:
             cv.imshow("rbg", cv.cvtColor(rgb, cv.COLOR_BGR2RGB))
             # cv.imshow('depth', depth)
@@ -799,12 +938,15 @@ class MJ_Controller(object):
 
     def depth_2_meters(self, depth):
         """
-        Converts the depth array delivered by MuJoCo (values between 0 and 1) into actual m values.
-
-        Args:
-            depth: The depth array to be converted.
+        Converts the depth array delivered by MuJoCo into actual m values.
+        The official mujoco.Renderer already returns metric depth values when depth
+        rendering is enabled, so in that case the input is returned unchanged.
         """
 
+        if getattr(self, "depth_is_metric", False):
+            return depth
+
+        depth = np.asarray(depth)
         extend = self.model.stat.extent
         near = self.model.vis.map.znear * extend
         far = self.model.vis.map.zfar * extend
@@ -815,7 +957,7 @@ class MJ_Controller(object):
         Initializes all camera parameters that only need to be calculated once.
         """
 
-        cam_id = self.model.camera_name2id(camera)
+        cam_id = self.camera_name2id(camera)
         # Get field of view
         fovy = self.model.cam_fovy[cam_id]
         # Calculate focal length

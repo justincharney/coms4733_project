@@ -4,7 +4,10 @@ import sys
 import atexit
 from pathlib import Path
 
-os.environ["MUJOCO_GL"] = "osmesa"
+# Prefer EGL on Linux servers and GLFW on macOS; osmesa is not available in the
+# default macOS wheels for mujoco.
+if "MUJOCO_GL" not in os.environ:
+    os.environ["MUJOCO_GL"] = "egl" if os.uname().sysname != "Darwin" else "glfw"
 
 import gym
 import torch
@@ -240,7 +243,7 @@ class Grasp_Agent:
         )
         # self.normal_depth =T.Compose([T.Lambda(lambda x : x + 0.001*torch.randn_like(x))])
         self.depth_threshold = np.round(
-            self.env.model.cam_pos0[self.env.model.camera_name2id("top_down")][2]
+            self.env.model.cam_pos0[self.env.controller.camera_name2id("top_down")][2]
             - self.env.TABLE_HEIGHT
             + 0.01,
             decimals=3,
