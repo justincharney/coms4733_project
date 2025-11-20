@@ -984,11 +984,11 @@ class MJ_Controller(object):
         if not self.cam_init:
             self.create_camera_data(width, height, camera)
 
-        # Homogeneous image point
-        hom_pixel = (
-            self.cam_matrix @ self.cam_rot_mat @ (world_coordinate - self.cam_pos)
-        )
-        # Real image point
+        world_coordinate = np.asarray(world_coordinate, dtype=np.float64)
+        # Transform world point into the camera frame (MuJoCo stores cam_mat0 as camera->world).
+        cam_point = self.cam_rot_mat.T @ (world_coordinate - self.cam_pos)
+        # Project into pixel space
+        hom_pixel = self.cam_matrix @ cam_point
         pixel = hom_pixel[:2] / hom_pixel[2]
 
         return np.round(pixel[0]).astype(int), np.round(pixel[1]).astype(int)
@@ -1011,12 +1011,11 @@ class MJ_Controller(object):
         if not self.cam_init:
             self.create_camera_data(width, height, camera)
 
-        # Create coordinate vector
-        pixel_coord = np.array([pixel_x, pixel_y, 1]) * (-depth)
-        # Get position relative to camera
+        pixel_coord = np.array([pixel_x, pixel_y, 1], dtype=np.float64) * depth
+        # Position in the camera frame
         pos_c = np.linalg.inv(self.cam_matrix) @ pixel_coord
-        # Get world position
-        pos_w = np.linalg.inv(self.cam_rot_mat) @ (pos_c + self.cam_pos)
+        # Transform back to world (cam_mat0 maps camera -> world)
+        pos_w = self.cam_rot_mat @ pos_c + self.cam_pos
 
         return pos_w
 
