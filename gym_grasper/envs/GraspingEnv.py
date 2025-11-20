@@ -209,6 +209,8 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 )
                 # Binary reward
                 reward = 0.0
+                reach_success = False
+                grasp_coordinates = None
 
             else:
                 grasped_something, grasp_coordinates, reach_success = self.move_and_grasp(
