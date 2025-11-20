@@ -211,7 +211,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 reward = 0.0
 
             else:
-                grasped_something = self.move_and_grasp(
+                grasped_something, grasp_coordinates, reach_success = self.move_and_grasp(
                     coordinates,
                     rotation,
                     render=self.render_enabled,
@@ -230,6 +230,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
                     achieved_goal = self.last_grasped_object_pose.copy()
                 else:
                     achieved_goal = self._get_end_effector_position()
+            elif reach_success and grasp_coordinates is not None:
+                # If we reached the target but failed to grasp, we still achieved the goal of reaching that location.
+                # This helps HER to reinforce the reaching policy.
+                achieved_goal = np.array(grasp_coordinates, dtype=np.float32)
             else:
                 achieved_goal = self._get_end_effector_position()
 
@@ -353,6 +357,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
             coordinates_2 = None
             steps2 = 0
             result_grasp = False
+            reach_success = False
 
         else:
             # Rotate gripper according to second action dimension
@@ -381,8 +386,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
             if result2[:3] == "max":
                 result2 = "Could not reach target location"
                 result_grasp = False
+                reach_success = False
 
             else:
+                reach_success = True
                 self.controller.stay(100, render=render)
                 result_grasp = self.controller.grasp(
                     render=render, quiet=True, marker=markers, plot=plot
@@ -511,10 +518,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
 
         if grasped_something:
             print(colored("Successful grasp!", color="green", attrs=["bold"]))
-            return True
+            return True, coordinates_2, reach_success
         else:
             print(colored("Did not grasp anything.", color="red", attrs=["bold"]))
-            return False
+            return False, coordinates_2, reach_success
 
     # @debug
     # @dict2list

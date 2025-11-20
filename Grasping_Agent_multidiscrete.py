@@ -119,7 +119,7 @@ def save_scene_snapshot(controller, run_tag, cameras=None, width=1280, height=96
             width=width, height=height, camera=camera_name
         )
         snapshot_path = snapshots_dir / f"{run_tag}_{camera_name}_scene.png"
-        success = cv.imwrite(str(snapshot_path), cv.cvtColor(rgb, cv.COLOR_BGR2RGB))
+        success = cv.imwrite(str(snapshot_path), cv.cvtColor(rgb, cv.COLOR_RGB2BGR))
         if success:
             saved_paths.append(snapshot_path)
             print(
