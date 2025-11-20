@@ -919,22 +919,20 @@ class MJ_Controller(object):
             camera: String specifying the name of the camera to use.
         """
 
-        rgb, depth = copy.deepcopy(
-            self.sim.render(width=width, height=height, camera_name=camera, depth=True)
-        )
-        rgb = np.asarray(rgb)
+        rgb, depth = self.sim.render(width=width, height=height, camera_name=camera, depth=True)
+        rgb = np.asarray(copy.deepcopy(rgb))
+        depth = np.asarray(copy.deepcopy(depth))
         if rgb.dtype != np.uint8:
             rgb = (np.clip(rgb, 0.0, 1.0) * 255).astype(np.uint8)
         if show:
-            cv.imshow("rbg", cv.cvtColor(rgb, cv.COLOR_BGR2RGB))
+            # Convert RGB (MuJoCo) to BGR for OpenCV display.
+            cv.imshow("rbg", cv.cvtColor(rgb, cv.COLOR_RGB2BGR))
             # cv.imshow('depth', depth)
             cv.waitKey(1)
             # cv.waitKey(delay=5000)
             # cv.destroyAllWindows()
 
-        return np.array(np.fliplr(np.flipud(rgb))), np.array(
-            np.fliplr(np.flipud(depth))
-        )
+        return rgb, depth
 
     def depth_2_meters(self, depth):
         """
