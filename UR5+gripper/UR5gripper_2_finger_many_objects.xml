@@ -41,6 +41,7 @@ Control Engineering / Automation Engineering
 
     <visual>
         <map fogstart="3" fogend="5" znear="0.05"/>
+        <global offwidth="1280" offheight="960"/>
         <quality shadowsize="2048"/>
         <scale framelength="0.1"
                framewidth="0.005"

@@ -1,7 +1,7 @@
 # Author: Paul Daniel (pdd@mp.aau.dk)
+import atexit
 import os
 import sys
-import atexit
 from pathlib import Path
 
 # Prefer EGL on Linux servers and GLFW on macOS; osmesa is not available in the
@@ -9,25 +9,25 @@ from pathlib import Path
 if "MUJOCO_GL" not in os.environ:
     os.environ["MUJOCO_GL"] = "egl" if os.uname().sysname != "Darwin" else "glfw"
 
-import gym
-import torch
-import torchvision.transforms as T
-import torch.nn.functional as F
-import torch.optim as optim
-import torch.nn as nn
-from torch.utils.tensorboard import SummaryWriter
-from Modules import ReplayBuffer, Transition, simple_Transition
-from termcolor import colored
-import numpy as np
-import pickle
-import random
 import copy
 import math
-import cv2 as cv
-from collections import deque, defaultdict
+import pickle
+import random
 import time
-from Modules import MULTIDISCRETE_RESNET
+from collections import defaultdict, deque
 
+import cv2 as cv
+import gym
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+import torchvision.transforms as T
+from termcolor import colored
+from torch.utils.tensorboard import SummaryWriter
+
+from Modules import MULTIDISCRETE_RESNET, ReplayBuffer, Transition, simple_Transition
 
 HEIGHT = 200
 WIDTH = 200
@@ -519,7 +519,9 @@ class Grasp_Agent:
             goal_map /= max_val
         return goal_map
 
-    def maybe_save_goal_heatmap_example(self, observation, path="renders/goal_heatmap_example.png"):
+    def maybe_save_goal_heatmap_example(
+        self, observation, path="renders/goal_heatmap_example.png"
+    ):
         if self.goal_heatmap_example_saved:
             return
         goal_map = self._build_goal_map(observation)[0]

@@ -39,6 +39,7 @@ Control Engineering / Automation Engineering
 
     <visual>
         <map fogstart="3" fogend="5" znear="0.05"/>
+        <global offwidth="1280" offheight="960"/>
         <quality shadowsize="2048"/>
         <scale framelength="0.1"
                framewidth="0.005"
@@ -188,7 +189,7 @@ Control Engineering / Automation Engineering
                                             <body name="robotiq_85_base_link" pos="0 0 0" quat="0.5 0.5 0.5 0.5 ">
                                             <inertial pos="0.00021987 -2.3546e-10 0.030163"  quat="0.707058 0.00723369 0.00723345 0.707081" mass="0.30915" diaginertia="0.00030737 0.000289758 0.000199102" />
                                             <geom type="mesh" rgba="0.1 0.1 0.1 1" friction="0.8 0.8 0.8" mesh="robotiq_85_base_link_coarse" />
-                                      
+
                                             <body name="left_inner_knuckle" pos="0.0127 0 0.0693075">
                                                 <inertial pos="0.0170975 -3.93809e-10 0.0224918"   quat="0.947655 0 -0.319297 0" mass="0.0110931" diaginertia="5.59353e-06 3.96549e-06 1.88108e-06" />
                                                 <geom type="mesh" rgba="0.1 0.1 0.1 1" friction="0.8 0.8 0.8" mesh="inner_knuckle_coarse" />
@@ -374,7 +375,7 @@ Control Engineering / Automation Engineering
         <!-- <motor name='middle_finger_T'  ctrllimited="true" joint='gripperfinger_middle_joint_1' ctrlrange='-0.5 .8' gear="20"/> -->
         <!-- <motor name='finger_scissor_T' ctrllimited="true" joint='gripperpalm_finger_1_joint' ctrlrange="-0.8 0.8" gear="15"/>    -->
 
-     <!--    
+     <!--
         <motor name='finger_1_T' ctrllimited="true" joint='gripperfinger_1_joint_1' ctrlrange='-0.1 .8' gear="20"/>
         <motor name='finger_2_T' ctrllimited="true" joint='gripperfinger_2_joint_1' ctrlrange='-0.1 .8' gear="20"/>
         <motor name='middle_finger_T'  ctrllimited="true" joint='gripperfinger_middle_joint_1' ctrlrange='-0.1 .8' gear="20"/>

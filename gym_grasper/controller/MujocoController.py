@@ -2,19 +2,21 @@
 
 # Author: Paul Daniel (pdd@mp.aau.dk)
 
-from collections import defaultdict
+import copy
 import os
-from pathlib import Path
 import time
-import numpy as np
-import mujoco as mj
-from simple_pid import PID
-from termcolor import colored
-from ikpy.chain import Chain
-from pyquaternion import Quaternion
+from collections import defaultdict
+from pathlib import Path
+
 import cv2 as cv
 import matplotlib.pyplot as plt
-import copy
+import mujoco as mj
+import numpy as np
+from ikpy.chain import Chain
+from pyquaternion import Quaternion
+from simple_pid import PID
+from termcolor import colored
+
 from decorators import debug
 
 
@@ -161,7 +163,8 @@ class MJ_Controller(object):
             "wrist_3_joint",
         ]
         self._ik_joint_limits = [
-            self.ee_chain.links[i].bounds for i in range(1, 1 + len(self._ik_joint_names))
+            self.ee_chain.links[i].bounds
+            for i in range(1, 1 + len(self._ik_joint_names))
         ]
         self.cam_matrix = None
         self.cam_init = False
@@ -667,8 +670,7 @@ class MJ_Controller(object):
             # We want to be able to spedify the ee position in world coordinates, so subtract the position of the
             # base link. This is because the inverse kinematics solver chain starts at the base link.
             ee_position_base = (
-                ee_position
-                - self.sim.data.xpos[self.body_name2id("base_link")]
+                ee_position - self.sim.data.xpos[self.body_name2id("base_link")]
             )
 
             # By adding the appr. distance between ee_link and grasp center, we can now specify a world target position
@@ -757,9 +759,7 @@ class MJ_Controller(object):
             # for i in range(self.model.njnt):
             name = self.joint_id2name(i)
             print(
-                "Current angle for joint {}: {}".format(
-                    name, self.get_joint_qpos(name)
-                )
+                "Current angle for joint {}: {}".format(name, self.get_joint_qpos(name))
             )
             # print('Current angle for joint {}: {}'.format(self.model.joint_id2name(i), self.sim.data.qpos[i]))
 
@@ -919,7 +919,9 @@ class MJ_Controller(object):
             camera: String specifying the name of the camera to use.
         """
 
-        rgb, depth = self.sim.render(width=width, height=height, camera_name=camera, depth=True)
+        rgb, depth = self.sim.render(
+            width=width, height=height, camera_name=camera, depth=True
+        )
         rgb = np.asarray(copy.deepcopy(rgb))
         depth = np.asarray(copy.deepcopy(depth))
         if rgb.dtype != np.uint8:
