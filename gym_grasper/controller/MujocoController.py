@@ -992,7 +992,7 @@ class MJ_Controller(object):
         # MuJoCo/OpenGL camera looks along -Z in camera coordinates; use forward depth = -z.
         forward_depth = -cam_point[2]
         hom_pixel = self.cam_matrix @ np.array(
-            [cam_point[0], cam_point[1], forward_depth], dtype=np.float64
+            [cam_point[0], -cam_point[1], forward_depth], dtype=np.float64
         )
         pixel = hom_pixel[:2] / hom_pixel[2]
 
@@ -1019,7 +1019,7 @@ class MJ_Controller(object):
         pixel_coord = np.array([pixel_x, pixel_y, 1], dtype=np.float64) * depth
         cam_vec = np.linalg.inv(self.cam_matrix) @ pixel_coord
         # Convert back to the MuJoCo camera frame (z forward is negative).
-        cam_point = np.array([cam_vec[0], cam_vec[1], -cam_vec[2]], dtype=np.float64)
+        cam_point = np.array([cam_vec[0], -cam_vec[1], -cam_vec[2]], dtype=np.float64)
         pos_w = self.cam_rot_mat @ cam_point + self.cam_pos
 
         return pos_w
