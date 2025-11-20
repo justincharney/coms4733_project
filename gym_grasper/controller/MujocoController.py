@@ -987,8 +987,11 @@ class MJ_Controller(object):
         world_coordinate = np.asarray(world_coordinate, dtype=np.float64)
         # Transform world point into the camera frame (MuJoCo stores cam_mat0 as camera->world).
         cam_point = self.cam_rot_mat.T @ (world_coordinate - self.cam_pos)
-        # Project into pixel space
-        hom_pixel = self.cam_matrix @ cam_point
+        # MuJoCo/OpenGL camera looks along -Z in camera coordinates; use forward depth = -z.
+        forward_depth = -cam_point[2]
+        hom_pixel = self.cam_matrix @ np.array(
+            [cam_point[0], cam_point[1], forward_depth], dtype=np.float64
+        )
         pixel = hom_pixel[:2] / hom_pixel[2]
 
         return np.round(pixel[0]).astype(int), np.round(pixel[1]).astype(int)
@@ -1012,10 +1015,10 @@ class MJ_Controller(object):
             self.create_camera_data(width, height, camera)
 
         pixel_coord = np.array([pixel_x, pixel_y, 1], dtype=np.float64) * depth
-        # Position in the camera frame
-        pos_c = np.linalg.inv(self.cam_matrix) @ pixel_coord
-        # Transform back to world (cam_mat0 maps camera -> world)
-        pos_w = self.cam_rot_mat @ pos_c + self.cam_pos
+        cam_vec = np.linalg.inv(self.cam_matrix) @ pixel_coord
+        # Convert back to the MuJoCo camera frame (z forward is negative).
+        cam_point = np.array([cam_vec[0], cam_vec[1], -cam_vec[2]], dtype=np.float64)
+        pos_w = self.cam_rot_mat @ cam_point + self.cam_pos
 
         return pos_w
 
