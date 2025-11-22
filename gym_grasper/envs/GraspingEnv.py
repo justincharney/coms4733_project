@@ -4,23 +4,29 @@
 import sys
 
 sys.path.insert(0, "..")
-import os
-import time
-import math
-import cv2 as cv
-import numpy as np
-import mujoco as mj
-import gym
-from gym import utils, spaces
-from gym_grasper.controller.MujocoController import MJ_Controller, MjSimWrapper, DummyViewer
-import traceback
-from pathlib import Path
 import copy
-from collections import defaultdict
+import math
+import os
 import random
-from termcolor import colored
-from decorators import *
+import time
+import traceback
+from collections import defaultdict
+from pathlib import Path
+
+import cv2 as cv
+import gym
+import mujoco as mj
+import numpy as np
+from gym import spaces, utils
 from pyquaternion import Quaternion
+from termcolor import colored
+
+from decorators import *
+from gym_grasper.controller.MujocoController import (
+    DummyViewer,
+    MJ_Controller,
+    MjSimWrapper,
+)
 
 
 class GraspEnv(gym.Env, utils.EzPickle):
@@ -50,7 +56,9 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.joint_to_body = {}
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
-        utils.EzPickle.__init__(self, file, image_width, image_height, show_obs, demo, render)
+        utils.EzPickle.__init__(
+            self, file, image_width, image_height, show_obs, demo, render
+        )
         path = os.path.realpath(__file__)
         path = str(Path(path).parent.parent.parent)
         full_path = path + file
@@ -59,9 +67,14 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.data = self.sim.data
         self.frame_skip = 1
         self.dt = self.model.opt.timestep * self.frame_skip
-        self.metadata = {"render.modes": ["human", "rgb_array"], "video.frames_per_second": int(np.round(1 / self.dt))}
+        self.metadata = {
+            "render.modes": ["human", "rgb_array"],
+            "video.frames_per_second": int(np.round(1 / self.dt)),
+        }
         self.viewer = DummyViewer() if render else None
-        self.controller = MJ_Controller(self.model, self.sim, self.viewer if render else False)
+        self.controller = MJ_Controller(
+            self.model, self.sim, self.viewer if render else False
+        )
         self.initialized = True
         self.grasp_counter = 0
         self.show_observations = show_obs
@@ -213,12 +226,14 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 grasp_coordinates = None
 
             else:
-                grasped_something, grasp_coordinates, reach_success = self.move_and_grasp(
-                    coordinates,
-                    rotation,
-                    render=self.render_enabled,
-                    record_grasps=record_grasps,
-                    markers=markers,
+                grasped_something, grasp_coordinates, reach_success = (
+                    self.move_and_grasp(
+                        coordinates,
+                        rotation,
+                        render=self.render_enabled,
+                        record_grasps=record_grasps,
+                        markers=markers,
+                    )
                 )
 
             if grasped_something:
@@ -451,12 +466,12 @@ class GraspEnv(gym.Env, utils.EzPickle):
 
         if grasped_something and record_grasps:
             capture_rgb, depth = self.controller.get_image_data(
-                width=1000, height=1000, camera="side"
+                width=800, height=800, camera="side"
             )
             self.grasp_counter += 1
             os.makedirs("observations", exist_ok=True)
             img_name = "observations/Grasp_{}.png".format(self.grasp_counter)
-            cv.imwrite(img_name, cv.cvtColor(capture_rgb, cv.COLOR_BGR2RGB))
+            cv.imwrite(img_name, cv.cvtColor(capture_rgb, cv.COLOR_RGB2BGR))
 
         # Open gripper again
         result_open = self.controller.open_gripper(render=render, quiet=True, plot=plot)
@@ -645,7 +660,9 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.desired_goal = self._goal_from_qpos(self.goal_joint_name, qpos)
         self.target_body_id = self.joint_to_body.get(self.goal_joint_name)
         # Default achieved goal above table center
-        self.last_achieved_goal = np.array([0.0, -0.6, self.TABLE_HEIGHT], dtype=np.float32)
+        self.last_achieved_goal = np.array(
+            [0.0, -0.6, self.TABLE_HEIGHT], dtype=np.float32
+        )
 
     def _goal_from_qpos(self, joint_name, qpos):
         start, _ = self.controller.get_joint_qpos_addr(joint_name)
@@ -698,9 +715,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
         if self.target_body_id is None:
             self.desired_goal = np.zeros(3, dtype=np.float32)
             return
-        self.desired_goal = self._goal_from_qpos(
-            self.goal_joint_name, self.data.qpos
-        )
+        self.desired_goal = self._goal_from_qpos(self.goal_joint_name, self.data.qpos)
 
     def _get_end_effector_position(self):
         if self.ee_body_id is None:

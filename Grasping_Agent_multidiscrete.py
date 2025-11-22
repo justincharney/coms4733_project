@@ -33,10 +33,10 @@ HEIGHT = 200
 WIDTH = 200
 N_EPISODES = 1000
 STEPS_PER_EPISODE = 80
-MEMORY_SIZE = 2000
+MEMORY_SIZE = 50000
 MAX_POSSIBLE_SAMPLES = 12  # Number of transitions that fits on GPU memory for one backward-call (12 for RGB-D)
 NUMBER_ACCUMULATIONS_BEFORE_UPDATE = (
-    1  # How often to accumulate gradients before updating
+    8  # How often to accumulate gradients before updating
 )
 BATCH_SIZE = (
     MAX_POSSIBLE_SAMPLES * NUMBER_ACCUMULATIONS_BEFORE_UPDATE
