@@ -54,7 +54,26 @@ OPTIMIZER = "ADAM"
 USE_HER = True
 HER_FUTURE_K = 4
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    device = torch.device("cuda")
+elif torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print(
+        colored(
+            "Using Apple MPS (Metal Performance Shaders) acceleration.",
+            "green",
+            attrs=["bold"],
+        )
+    )
+else:
+    device = torch.device("cpu")
+    print(
+        colored(
+            "Using CPU for training (Warning: this will be slow).",
+            "yellow",
+            attrs=["bold"],
+        )
+    )
 
 
 class Tee:
