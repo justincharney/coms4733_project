@@ -73,7 +73,7 @@ trainset, testset = random_split(dataset_1, [train_size, test_size])
 train_loader = DataLoader(dataset=trainset, batch_size=BATCH_SIZE, shuffle=True)
 test_loader = DataLoader(dataset=testset, batch_size=BATCH_SIZE, shuffle=True)
 
-policy_net = MULTIDISCRETE_RESNET(6).to(device)
+policy_net = MULTIDISCRETE_RESNET(6, output_activation="Sigmoid").to(device)
 
 optimizer = optim.Adam(policy_net.parameters(), lr=LEARNING_RATE, weight_decay=0.00002)
 

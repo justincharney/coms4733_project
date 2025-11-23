@@ -42,8 +42,9 @@ NUMBER_ACCUMULATIONS_BEFORE_UPDATE = (
 BATCH_SIZE = (
     MAX_POSSIBLE_SAMPLES * NUMBER_ACCUMULATIONS_BEFORE_UPDATE
 )  # Effective batch size
-GAMMA = 0.0
-LEARNING_RATE = 0.001
+GAMMA = 0.9
+TARGET_NETWORK_UPDATE = 1000
+LEARNING_RATE = 0.0003
 EPS_STEADY = 0.0
 EPS_START = 1.0
 EPS_END = 0.05
@@ -248,6 +249,7 @@ class Grasp_Agent:
                 number_actions_dim_2=self.n_actions_2,
                 in_channels=self.input_channels,
             ).to(device)
+            self.target_net.load_state_dict(self.policy_net.state_dict())
             # No need for training on target net, we just copy the weigts from policy nets if we use it
             self.target_net.eval()
         # Load weights if training should not start from scratch
@@ -376,7 +378,38 @@ class Grasp_Agent:
             self.last_100_loss = deque(maxlen=100)
             self.last_1000_actions = deque(maxlen=1000)
 
-    def epsilon_greedy(self, state):
+    def compute_valid_action_mask(self, observation):
+        """
+        Build a boolean mask over all flattened pixel actions that are reachable based
+        on simple workspace heuristics (depth high enough, y not too far forward).
+        """
+
+        depth = observation.get("depth") if observation else None
+        if depth is None:
+            return None
+
+        valid = np.zeros((self.HEIGHT, self.WIDTH), dtype=bool)
+        for y in range(self.HEIGHT):
+            for x in range(self.WIDTH):
+                try:
+                    coordinates = self.env.controller.pixel_2_world(
+                        pixel_x=x,
+                        pixel_y=y,
+                        depth=depth[y][x],
+                        height=self.env.IMAGE_HEIGHT,
+                        width=self.env.IMAGE_WIDTH,
+                    )
+                except Exception:
+                    continue
+                if coordinates[2] >= 0.8 and coordinates[1] <= -0.3:
+                    valid[y, x] = True
+
+        flat_mask = torch.tensor(
+            valid.reshape(-1), dtype=torch.bool, device=device
+        )
+        return flat_mask
+
+    def epsilon_greedy(self, state, observation=None):
         """
         Returns an action according to the epsilon-greedy policy.
 
@@ -384,6 +417,7 @@ class Grasp_Agent:
             state: An observation / state that will be forwarded through the policy net if greedy action is chosen.
         """
 
+        valid_mask = self.compute_valid_action_mask(observation) if observation is not None else None
         sample = random.random()
         self.eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(
             -1.0 * self.steps_done / EPS_DECAY
@@ -400,7 +434,10 @@ class Grasp_Agent:
             self.last_action = "greedy"
             with torch.no_grad():
                 # For RESNET
-                max_idx = self.policy_net(state.to(device)).view(-1).max(0)[1]
+                q_values = self.policy_net(state.to(device)).view(-1)
+                if valid_mask is not None and valid_mask.any():
+                    q_values = q_values.masked_fill(~valid_mask, float("-inf"))
+                max_idx = q_values.max(0)[1]
                 max_idx = max_idx.view(1)
                 # Do not want to store replay buffer in GPU memory, so put action tensor to cpu.
                 return max_idx.unsqueeze_(0).cpu()
@@ -412,6 +449,11 @@ class Grasp_Agent:
         # of the selected pixel and resample until you get a pixel corresponding to a point on the table
         else:
             self.last_action = "random"
+            if valid_mask is not None and valid_mask.any():
+                valid_indices = valid_mask.nonzero(as_tuple=False).view(-1)
+                action = valid_indices[random.randrange(len(valid_indices))].item()
+                return torch.tensor([[action]], dtype=torch.long)
+
             while True:
                 action = random.randrange(self.output)
                 action_1 = action % self.n_actions_1
@@ -430,7 +472,7 @@ class Grasp_Agent:
 
             return torch.tensor([[action]], dtype=torch.long)
 
-    def greedy(self, state):
+    def greedy(self, state, observation=None):
         """
         Always returns the greedy action. For demonstrating learned behaviour.
 
@@ -439,9 +481,13 @@ class Grasp_Agent:
         """
 
         self.last_action = "greedy"
+        valid_mask = self.compute_valid_action_mask(observation) if observation is not None else None
 
         with torch.no_grad():
-            max_o = self.policy_net(state.to(device)).view(-1).max(0)
+            q_values = self.policy_net(state.to(device)).view(-1)
+            if valid_mask is not None and valid_mask.any():
+                q_values = q_values.masked_fill(~valid_mask, float("-inf"))
+            max_o = q_values.max(0)
             max_idx = max_o[1]
             max_value = max_o[0]
 
@@ -632,31 +678,31 @@ class Grasp_Agent:
             reward_batch = torch.cat(batch.reward[start_idx:end_idx]).to(device)
 
             # Current Q prediction of our policy net, for the actions we took
-            q_pred = (
-                self.policy_net(state_batch)
-                .view(MAX_POSSIBLE_SAMPLES, -1)
-                .gather(1, action_batch)
-            )
+            batch_size = state_batch.size(0)
+            q_values = self.policy_net(state_batch).view(batch_size, -1)
+            q_pred = q_values.gather(1, action_batch)
             # q_pred = self.policy_net(state_batch).gather(1, action_batch)
 
             if GAMMA == 0.0:
                 q_expected = reward_batch.float()
             else:
                 # Q prediction of the target net of the next state
-                q_next_state = (
-                    self.target_net(next_state_batch).max(1)[0].unsqueeze(1).detach()
+                next_q_values = self.target_net(next_state_batch).view(
+                    batch_size, -1
                 )
+                q_next_state = next_q_values.max(1)[0].unsqueeze(1).detach()
 
                 # Calulate expected Q value using Bellmann: Q_t = r + gamma*Q_t+1
                 q_expected = reward_batch + (GAMMA * q_next_state)
 
+            target_q = q_expected.detach()
             loss = (
-                F.binary_cross_entropy(q_pred, q_expected)
+                F.smooth_l1_loss(q_pred, target_q)
                 / NUMBER_ACCUMULATIONS_BEFORE_UPDATE
             )
             loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), max_norm=5.0)
         self.last_100_loss.append(loss.item())
         # self.writer.add_scalar('Average loss', loss, global_step=self.steps_done)
         self.optimizer.step()

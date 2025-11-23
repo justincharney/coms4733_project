@@ -696,7 +696,11 @@ class GraspEnv(gym.Env, utils.EzPickle):
         achieved_goal = np.array(achieved_goal, dtype=np.float32)
         desired_goal = np.array(desired_goal, dtype=np.float32)
         distance = np.linalg.norm(achieved_goal[:2] - desired_goal[:2])
-        return 0.2 if distance <= self.goal_tolerance else 0.0
+        clipped_distance = min(distance, 1.0)
+        shaping = -0.5 * clipped_distance
+        step_cost = -0.01
+        success_bonus = 0.2 if distance <= self.goal_tolerance else 0.0
+        return shaping + success_bonus + step_cost
 
     def _cache_object_metadata(self):
         if not hasattr(self, "model"):
