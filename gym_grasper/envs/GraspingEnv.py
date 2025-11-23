@@ -268,6 +268,9 @@ class GraspEnv(gym.Env, utils.EzPickle):
 
             self.current_observation = self.get_observation(show=self.show_observations)
 
+            if grasped_something:
+                done = True
+
         self.step_called += 1
         info["desired_goal"] = goal_before_action.copy()
         info["achieved_goal"] = self.last_achieved_goal.copy()

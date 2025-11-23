@@ -862,6 +862,9 @@ def main():
 
                     agent.learn()
 
+                    if done:
+                        break
+
                 her_total, her_positive = agent.apply_her(episode_transitions)
                 if her_total > 0:
                     agent.writer.add_scalar(
