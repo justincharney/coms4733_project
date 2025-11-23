@@ -389,6 +389,17 @@ class Grasp_Agent:
             return None
 
         valid = np.zeros((self.HEIGHT, self.WIDTH), dtype=bool)
+        # Conservative workspace limits to avoid IK/visibility failures.
+        bounds = getattr(self.env, "workspace_bounds", None)
+        if bounds:
+            min_x, max_x = bounds.get("x", (-0.3, 0.3))
+            min_y, max_y = bounds.get("y", (-0.749, -0.35))
+        else:
+            min_y = -0.749
+            max_y = -0.35
+            min_x = -0.3
+            max_x = 0.3
+        min_z = self.env.TABLE_HEIGHT - 0.01
         for y in range(self.HEIGHT):
             for x in range(self.WIDTH):
                 try:
@@ -401,12 +412,19 @@ class Grasp_Agent:
                     )
                 except Exception:
                     continue
-                if coordinates[2] >= 0.8 and coordinates[1] <= -0.3:
+                if (
+                    coordinates[2] >= min_z
+                    and min_y <= coordinates[1] <= max_y
+                    and min_x <= coordinates[0] <= max_x
+                ):
                     valid[y, x] = True
 
-        flat_mask = torch.tensor(
-            valid.reshape(-1), dtype=torch.bool, device=device
-        )
+        # Expand mask to cover all rotations (n_actions_2)
+        # The network output shape is (n_actions_2, HEIGHT, WIDTH)
+        # We repeat the spatial mask for each rotation channel.
+        full_mask = np.repeat(valid[np.newaxis, :, :], self.n_actions_2, axis=0)
+
+        flat_mask = torch.tensor(full_mask.reshape(-1), dtype=torch.bool, device=device)
         return flat_mask
 
     def epsilon_greedy(self, state, observation=None):
@@ -417,7 +435,13 @@ class Grasp_Agent:
             state: An observation / state that will be forwarded through the policy net if greedy action is chosen.
         """
 
-        valid_mask = self.compute_valid_action_mask(observation) if observation is not None else None
+        if observation is None and hasattr(self.env, "current_observation"):
+            observation = getattr(self.env, "current_observation", None)
+        valid_mask = (
+            self.compute_valid_action_mask(observation)
+            if observation is not None
+            else None
+        )
         sample = random.random()
         self.eps_threshold = EPS_END + (EPS_START - EPS_END) * math.exp(
             -1.0 * self.steps_done / EPS_DECAY
@@ -481,7 +505,13 @@ class Grasp_Agent:
         """
 
         self.last_action = "greedy"
-        valid_mask = self.compute_valid_action_mask(observation) if observation is not None else None
+        if observation is None and hasattr(self.env, "current_observation"):
+            observation = getattr(self.env, "current_observation", None)
+        valid_mask = (
+            self.compute_valid_action_mask(observation)
+            if observation is not None
+            else None
+        )
 
         with torch.no_grad():
             q_values = self.policy_net(state.to(device)).view(-1)
@@ -687,9 +717,7 @@ class Grasp_Agent:
                 q_expected = reward_batch.float()
             else:
                 # Q prediction of the target net of the next state
-                next_q_values = self.target_net(next_state_batch).view(
-                    batch_size, -1
-                )
+                next_q_values = self.target_net(next_state_batch).view(batch_size, -1)
                 q_next_state = next_q_values.max(1)[0].unsqueeze(1).detach()
 
                 # Calulate expected Q value using Bellmann: Q_t = r + gamma*Q_t+1
@@ -697,8 +725,7 @@ class Grasp_Agent:
 
             target_q = q_expected.detach()
             loss = (
-                F.smooth_l1_loss(q_pred, target_q)
-                / NUMBER_ACCUMULATIONS_BEFORE_UPDATE
+                F.smooth_l1_loss(q_pred, target_q) / NUMBER_ACCUMULATIONS_BEFORE_UPDATE
             )
             loss.backward()
 
@@ -875,7 +902,7 @@ def main():
                     print(
                         "#################################################################"
                     )
-                    action = agent.epsilon_greedy(state)
+                    action = agent.epsilon_greedy(state, observation)
                     env_action = agent.transform_action(action)
                     next_observation, reward, done, info = agent.env.unwrapped.step(
                         env_action, record_grasps=True, action_info=agent.last_action

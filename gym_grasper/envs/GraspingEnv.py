@@ -56,6 +56,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.joint_to_body = {}
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
+        self.unreachable_goal = False
+        self.unreachable_goal_count = 0
+        # Conservative workspace limits shared with the agent's action mask.
+        self.workspace_bounds = {"x": (-0.3, 0.3), "y": (-0.749, -0.35)}
         utils.EzPickle.__init__(
             self, file, image_width, image_height, show_obs, demo, render
         )
@@ -152,6 +156,28 @@ class GraspEnv(gym.Env, utils.EzPickle):
         achieved_goal = self.last_achieved_goal.copy()
         if achieved_goal.shape[0] == 0:
             achieved_goal = np.zeros(3, dtype=np.float32)
+        if self.unreachable_goal:
+            # Abort the episode immediately if we could not sample a reachable goal at reset.
+            self.unreachable_goal = False
+            self.unreachable_goal_count += 1
+            print(
+                colored(
+                    f"[Workspace] Truncating episode; unreachable goal (count={self.unreachable_goal_count})",
+                    color="yellow",
+                    attrs=["bold"],
+                )
+            )
+            reward = -1.0
+            done = True
+            self.step_called += 1
+            info["desired_goal"] = goal_before_action.copy()
+            info["achieved_goal"] = achieved_goal.copy()
+            info["truncated"] = True
+            info["unreachable_goal"] = True
+            info["grasp_success"] = 0.0
+            info["is_success"] = her_reward
+            info["her_reward"] = her_reward
+            return self.current_observation, reward, done, info
         # Parent class will step once during init to set up the observation space, controller is not yet available at that time.
         # Therefore we simply return a dictionary of zeros of the appropriate size.
         if not self.initialized:
@@ -221,7 +247,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
                     )
                 )
                 # Binary reward
-                reward = 0.0
+                reward = -0.1
                 reach_success = False
                 grasp_coordinates = None
 
@@ -257,9 +283,12 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.last_achieved_goal = achieved_goal
             her_reward = float(self.compute_reward(achieved_goal, goal_before_action))
             if grasped_something:
-                reward = 1.0
+                reward = 5.0
+            elif not reach_success:
+                # Explicit penalty for IK/reach failures
+                reward = -1.0
             else:
-                # Reward either 0.2 or 0.0 based on if we had a successful reach
+                # Distance-based shaping reward (negative) to guide the agent to the object
                 reward = her_reward
 
             if self.initialized:
@@ -614,11 +643,12 @@ class GraspEnv(gym.Env, utils.EzPickle):
         for joint_name in self.object_joint_names:
             start, end = self.controller.get_joint_qpos_addr(joint_name)
             qpos[start] = np.random.uniform(low=-0.25, high=0.25)
-            qpos[start + 1] = np.random.uniform(low=-0.77, high=-0.43)
+            qpos[start + 1] = np.random.uniform(low=-0.74, high=-0.43)
             # qpos[start+2] = 1.0
             qpos[start + 2] = np.random.uniform(low=1.0, high=1.5)
             qpos[start + 3 : end] = Quaternion.random().unit.elements
-        self._set_new_goal(qpos)
+        goal_ok = self._set_new_goal(qpos)
+        self.unreachable_goal = not goal_ok
 
         #########################################################################
         # Reset for IT4, older versions of IT5
@@ -675,15 +705,38 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.goal_joint_name = None
             self.desired_goal = np.zeros(3, dtype=np.float32)
             self.last_achieved_goal = np.zeros(3, dtype=np.float32)
-            return
+            return False
 
-        self.goal_joint_name = random.choice(self.object_joint_names)
-        self.desired_goal = self._goal_from_qpos(self.goal_joint_name, qpos)
+        max_attempts = max(1, len(self.object_joint_names) * 2)
+        chosen_name = None
+        chosen_goal = None
+
+        for _ in range(max_attempts):
+            candidate_name = random.choice(self.object_joint_names)
+            candidate_goal = self._goal_from_qpos(candidate_name, qpos)
+            if self._goal_in_workspace(candidate_goal):
+                chosen_name = candidate_name
+                chosen_goal = candidate_goal
+                break
+
+        if chosen_name is None:
+            # Fallback: no reachable goals found, leave as zeros to avoid unreachable targets.
+            self.goal_joint_name = None
+            self.desired_goal = np.zeros(3, dtype=np.float32)
+            self.target_body_id = None
+            self.last_achieved_goal = np.array(
+                [0.0, -0.6, self.TABLE_HEIGHT], dtype=np.float32
+            )
+            return False
+
+        self.goal_joint_name = chosen_name
+        self.desired_goal = chosen_goal
         self.target_body_id = self.joint_to_body.get(self.goal_joint_name)
         # Default achieved goal above table center
         self.last_achieved_goal = np.array(
             [0.0, -0.6, self.TABLE_HEIGHT], dtype=np.float32
         )
+        return True
 
     def _goal_from_qpos(self, joint_name, qpos):
         start, _ = self.controller.get_joint_qpos_addr(joint_name)
@@ -692,15 +745,20 @@ class GraspEnv(gym.Env, utils.EzPickle):
             dtype=np.float32,
         )
 
+    def _goal_in_workspace(self, goal):
+        x_min, x_max = self.workspace_bounds["x"]
+        y_min, y_max = self.workspace_bounds["y"]
+        return x_min <= goal[0] <= x_max and y_min <= goal[1] <= y_max
+
     def compute_reward(self, achieved_goal, desired_goal):
         achieved_goal = np.array(achieved_goal, dtype=np.float32)
         desired_goal = np.array(desired_goal, dtype=np.float32)
         distance = np.linalg.norm(achieved_goal[:2] - desired_goal[:2])
         clipped_distance = min(distance, 1.0)
-        shaping = -0.5 * clipped_distance
-        step_cost = -0.01
-        success_bonus = 0.2 if distance <= self.goal_tolerance else 0.0
-        return shaping + success_bonus + step_cost
+        shaping = -0.25 * clipped_distance
+        step_cost = -0.002
+        # success_bonus = 0.2 if distance <= self.goal_tolerance else 0.0
+        return shaping + step_cost
 
     def _cache_object_metadata(self):
         if not hasattr(self, "model"):
