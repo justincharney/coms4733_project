@@ -175,7 +175,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
             info["truncated"] = True
             info["unreachable_goal"] = True
             info["grasp_success"] = 0.0
-            info["is_success"] = her_reward
+            info["is_success"] = 0.0
             info["her_reward"] = her_reward
             return self.current_observation, reward, done, info
         # Parent class will step once during init to set up the observation space, controller is not yet available at that time.
@@ -247,7 +247,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
                     )
                 )
                 # Binary reward
-                reward = -0.1
+                reward = -0.3
                 reach_success = False
                 grasp_coordinates = None
 
@@ -308,7 +308,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.step_called += 1
         info["desired_goal"] = goal_before_action.copy()
         info["achieved_goal"] = self.last_achieved_goal.copy()
-        info["is_success"] = her_reward
+        info["is_success"] = float(
+            np.linalg.norm(self.last_achieved_goal[:2] - goal_before_action[:2])
+            <= self.goal_tolerance
+        )
         info["her_reward"] = her_reward
         info["grasp_success"] = 1.0 if grasped_something else 0.0
 
