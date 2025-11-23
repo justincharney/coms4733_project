@@ -256,7 +256,12 @@ class GraspEnv(gym.Env, utils.EzPickle):
 
             self.last_achieved_goal = achieved_goal
             her_reward = float(self.compute_reward(achieved_goal, goal_before_action))
-            reward = her_reward
+            if grasped_something:
+                reward = 1.0
+            else:
+                # Reward either 0.2 or 0.0 based on if we had a successful reach
+                reward = her_reward
+
             if self.initialized:
                 print(
                     colored(
@@ -432,16 +437,26 @@ class GraspEnv(gym.Env, utils.EzPickle):
         steps3 = self.controller.last_steps
 
         # Move to drop position
+        drop_target = np.array([0.6, 0.0, 1.15], dtype=np.float32)
         result4 = self.controller.move_ee(
-            [0.6, 0.0, 1.15],
-            max_steps=1200,
+            drop_target,
+            max_steps=1600,
             quiet=True,
             render=render,
             plot=plot,
             marker=markers,
-            tolerance=0.01,
+            tolerance=0.03,
         )
         steps4 = self.controller.last_steps
+
+        # If we hit the step limit but are effectively at the drop pose, treat it as success
+        if result4.startswith("max"):
+            ee_after_drop = self._get_end_effector_position()
+            drop_err = np.linalg.norm(ee_after_drop - drop_target)
+            if drop_err < 0.05:
+                result4 = f"success (within {drop_err:.3f} m of drop target)"
+            else:
+                print(f"Drop failed. Distance to target: {drop_err:.3f} m")
 
         # self.controller.stay(500)
 
@@ -519,7 +534,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
         print("Final finger check: ".ljust(40, " "), final_str)
         print("Open gripper: ".ljust(40, " "), result_open, ",", steps_open, "steps")
 
-        if result1 == result2 == result3 == result4 == result_open == "success":
+        if all(
+            str(r).startswith("success")
+            for r in (result1, result2, result3, result4, result_open)
+        ):
             print(
                 colored(
                     "Executed all movements successfully.",
@@ -678,7 +696,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
         achieved_goal = np.array(achieved_goal, dtype=np.float32)
         desired_goal = np.array(desired_goal, dtype=np.float32)
         distance = np.linalg.norm(achieved_goal[:2] - desired_goal[:2])
-        return 1.0 if distance <= self.goal_tolerance else 0.0
+        return 0.2 if distance <= self.goal_tolerance else 0.0
 
     def _cache_object_metadata(self):
         if not hasattr(self, "model"):

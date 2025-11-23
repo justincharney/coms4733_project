@@ -1,6 +1,7 @@
 # Author: Paul Daniel (pdd@mp.aau.dk)
 import atexit
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -33,10 +34,10 @@ HEIGHT = 200
 WIDTH = 200
 N_EPISODES = 1000
 STEPS_PER_EPISODE = 80
-MEMORY_SIZE = 2000
+MEMORY_SIZE = 60000
 MAX_POSSIBLE_SAMPLES = 12  # Number of transitions that fits on GPU memory for one backward-call (12 for RGB-D)
 NUMBER_ACCUMULATIONS_BEFORE_UPDATE = (
-    1  # How often to accumulate gradients before updating
+    8  # How often to accumulate gradients before updating
 )
 BATCH_SIZE = (
     MAX_POSSIBLE_SAMPLES * NUMBER_ACCUMULATIONS_BEFORE_UPDATE
@@ -76,6 +77,9 @@ else:
     )
 
 
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
 class Tee:
     """Duplicate stdout/stderr to also write into a log file."""
 
@@ -84,7 +88,14 @@ class Tee:
 
     def write(self, data):
         for stream in self.streams:
-            stream.write(data)
+            text = data
+            try:
+                if hasattr(stream, "isatty") and not stream.isatty():
+                    text = ANSI_ESCAPE_RE.sub("", data)
+            except Exception:
+                # Fallback to raw data if anything goes wrong stripping ANSI codes.
+                text = data
+            stream.write(text)
         return len(data)
 
     def flush(self):
@@ -645,6 +656,7 @@ class Grasp_Agent:
             )
             loss.backward()
 
+        torch.nn.utils.clip_grad_norm_(self.policy_net.parameters(), 10)
         self.last_100_loss.append(loss.item())
         # self.writer.add_scalar('Average loss', loss, global_step=self.steps_done)
         self.optimizer.step()
