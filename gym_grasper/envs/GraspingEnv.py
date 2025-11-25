@@ -59,7 +59,8 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.unreachable_goal = False
         self.unreachable_goal_count = 0
         # Conservative workspace limits shared with the agent's action mask.
-        self.workspace_bounds = {"x": (-0.3, 0.3), "y": (-0.749, -0.35)}
+        # Using tightened bounds to avoid IK failures at edges.
+        self.workspace_bounds = {"x": (-0.25, 0.25), "y": (-0.70, -0.40)}
         utils.EzPickle.__init__(
             self, file, image_width, image_height, show_obs, demo, render
         )
@@ -198,6 +199,21 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self._refresh_desired_goal()
             goal_before_action = self.desired_goal.copy()
             achieved_goal = self._get_end_effector_position()
+
+            # If goal slipped out of workspace, truncate early to avoid wasting steps
+            if not self._goal_in_workspace(goal_before_action):
+                self.unreachable_goal_count += 1
+                reward = -1.0
+                done = True
+                self.step_called += 1
+                info["desired_goal"] = goal_before_action.copy()
+                info["achieved_goal"] = achieved_goal.copy()
+                info["truncated"] = True
+                info["unreachable_goal"] = True
+                info["grasp_success"] = 0.0
+                info["is_success"] = 0.0
+                info["her_reward"] = 0.0
+                return self.current_observation, reward, done, info
             self.last_grasped_object_pose = None
             self.last_grasped_object_name = None
 
@@ -308,10 +324,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.step_called += 1
         info["desired_goal"] = goal_before_action.copy()
         info["achieved_goal"] = self.last_achieved_goal.copy()
-        info["is_success"] = float(
-            np.linalg.norm(self.last_achieved_goal[:2] - goal_before_action[:2])
-            <= self.goal_tolerance
-        )
+        info["is_success"] = float(grasped_something)
         info["her_reward"] = her_reward
         info["grasp_success"] = 1.0 if grasped_something else 0.0
 
@@ -646,7 +659,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
         for joint_name in self.object_joint_names:
             start, end = self.controller.get_joint_qpos_addr(joint_name)
             qpos[start] = np.random.uniform(low=-0.25, high=0.25)
-            qpos[start + 1] = np.random.uniform(low=-0.74, high=-0.43)
+            qpos[start + 1] = np.random.uniform(low=-0.65, high=-0.45)
             # qpos[start+2] = 1.0
             qpos[start + 2] = np.random.uniform(low=1.0, high=1.5)
             qpos[start + 3 : end] = Quaternion.random().unit.elements

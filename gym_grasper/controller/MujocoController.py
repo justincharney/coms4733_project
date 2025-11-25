@@ -1024,6 +1024,35 @@ class MJ_Controller(object):
 
         return pos_w
 
+    def pixel_2_world_batch(
+        self, pixel_x, pixel_y, depth, width=200, height=200, camera="top_down"
+    ):
+        """
+        Vectorized version of pixel_2_world using the same camera model.
+
+        Args:
+            pixel_x, pixel_y: Arrays of pixel coordinates.
+            depth: Array of depth values (same shape as pixel_x/pixel_y).
+            width/height/camera: Image specs matching the rendered frame.
+        Returns:
+            ndarray of shape (N, 3) with world coordinates.
+        """
+
+        if not self.cam_init:
+            self.create_camera_data(width, height, camera)
+
+        pixel_x = np.asarray(pixel_x, dtype=np.float64)
+        pixel_y = np.asarray(pixel_y, dtype=np.float64)
+        depth = np.asarray(depth, dtype=np.float64)
+
+        ones = np.ones_like(depth)
+        pixel_coord = np.stack((pixel_x, pixel_y, ones), axis=0) * depth
+        cam_vec = np.linalg.inv(self.cam_matrix) @ pixel_coord
+        cam_point = np.stack((cam_vec[0], -cam_vec[1], -cam_vec[2]), axis=0)
+        pos_w = self.cam_rot_mat @ cam_point + self.cam_pos.reshape(3, 1)
+
+        return pos_w.T
+
     def add_marker(self, coordinates, label=True, size=None, color=None):
         """
         Adds a circular red marker at the coordinates, dislaying the coordinates as a label.

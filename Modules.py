@@ -8,7 +8,8 @@ import numpy as np
 import random
 import time
 
-Transition = namedtuple("Transition", ("state", "action", "next_state", "reward"))
+Transition = namedtuple('Transition',
+                        ('state', 'action', 'next_state', 'reward', 'done'))
 
 simple_Transition = namedtuple("simple_Transition", ("state", "action", "reward"))
 
@@ -26,27 +27,53 @@ def get_mean_std():
 
 
 class ReplayBuffer(object):
-    def __init__(self, size, simple=False):
+    def __init__(self, size, simple=False, success_ratio=0.25):
         self.size = size
         self.memory = []
+        self.success_memory = [] # Separate buffer for successful transitions
         self.position = 0
+        self.success_position = 0
         self.simple = simple
+        self.success_ratio = success_ratio
         random.seed(20)
 
     def push(self, *args):
         if len(self.memory) < self.size:
             self.memory.append(None)
+        
+        # Create transition
         if self.simple:
-            self.memory[self.position] = simple_Transition(*args)
+            t = simple_Transition(*args)
         else:
-            self.memory[self.position] = Transition(*args)
-        # If replay buffer is full, we start overwriting the first entries
+            t = Transition(*args)
+            
+        self.memory[self.position] = t
         self.position = (self.position + 1) % self.size
+        
+        # Check if reward is positive (successful grasp) and add to success buffer
+        try:
+            reward_val = float(args[3] if not self.simple else args[2])
+            if reward_val > 0.0:
+                cap = max(1, self.size // 5)  # avoid zero when size is small
+                if len(self.success_memory) < cap:
+                    self.success_memory.append(None)
+                self.success_memory[self.success_position] = t
+                self.success_position = (self.success_position + 1) % cap
+        except Exception:
+            pass
 
     def sample(self, batch_size):
-        rand_samples = random.sample(self.memory, batch_size - 1)
-        rand_samples.append(self.memory[self.position - 1])
-        return rand_samples
+        n_success = int(batch_size * self.success_ratio)
+        n_regular = batch_size - n_success
+
+        if len(self.success_memory) < n_success:
+            # Not enough successes yet, just sample normally
+            return random.sample(self.memory, batch_size)
+
+        success_samples = random.sample(self.success_memory, n_success)
+        regular_samples = random.sample(self.memory, n_regular)
+
+        return success_samples + regular_samples
 
     def get(self, index):
         return self.memory[index]

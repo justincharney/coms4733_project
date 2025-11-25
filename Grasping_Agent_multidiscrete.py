@@ -55,6 +55,7 @@ ALGORITHM = "DQN"
 OPTIMIZER = "ADAM"
 USE_HER = True
 HER_FUTURE_K = 4
+TAU = 0.005 # Soft update parameter
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -368,6 +369,7 @@ class Grasp_Agent:
                 self.greedy_rotations = defaultdict(int)
                 self.greedy_rotations_successes = defaultdict(int)
                 self.random_rotations_successes = defaultdict(int)
+            self.opt_steps = 0 # Optimization steps counter
             # Tensorboard setup
             self.writer = SummaryWriter(comment=self.DESCRIPTION)
             sample_input = torch.zeros(
@@ -382,48 +384,70 @@ class Grasp_Agent:
         """
         Build a boolean mask over all flattened pixel actions that are reachable based
         on simple workspace heuristics (depth high enough, y not too far forward).
+        Uses the controller's projection math instead of reimplementing it.
         """
-
         depth = observation.get("depth") if observation else None
         if depth is None:
             return None
 
-        valid = np.zeros((self.HEIGHT, self.WIDTH), dtype=bool)
-        # Conservative workspace limits to avoid IK/visibility failures.
+        # Get workspace bounds
         bounds = getattr(self.env, "workspace_bounds", None)
-        if bounds:
-            min_x, max_x = bounds.get("x", (-0.3, 0.3))
-            min_y, max_y = bounds.get("y", (-0.749, -0.35))
-        else:
-            min_y = -0.749
-            max_y = -0.35
-            min_x = -0.3
-            max_x = 0.3
+        if not bounds:
+            raise ValueError("Environment must define 'workspace_bounds' to ensure agent-environment sync.")
+            
+        min_x, max_x = bounds["x"]
+        min_y, max_y = bounds["y"]
         min_z = self.env.TABLE_HEIGHT - 0.01
-        for y in range(self.HEIGHT):
-            for x in range(self.WIDTH):
-                try:
-                    coordinates = self.env.controller.pixel_2_world(
-                        pixel_x=x,
-                        pixel_y=y,
-                        depth=depth[y][x],
-                        height=self.env.IMAGE_HEIGHT,
-                        width=self.env.IMAGE_WIDTH,
-                    )
-                except Exception:
-                    continue
-                if (
-                    coordinates[2] >= min_z
-                    and min_y <= coordinates[1] <= max_y
-                    and min_x <= coordinates[0] <= max_x
-                ):
-                    valid[y, x] = True
+        controller = getattr(self.env, "controller", None)
+        valid = None
 
-        # Expand mask to cover all rotations (n_actions_2)
-        # The network output shape is (n_actions_2, HEIGHT, WIDTH)
-        # We repeat the spatial mask for each rotation channel.
+        if controller is not None and hasattr(controller, "pixel_2_world_batch"):
+            try:
+                grid_y, grid_x = np.mgrid[0 : self.HEIGHT, 0 : self.WIDTH]
+                coords = controller.pixel_2_world_batch(
+                    pixel_x=grid_x.reshape(-1),
+                    pixel_y=grid_y.reshape(-1),
+                    depth=depth.reshape(-1),
+                    width=self.env.IMAGE_WIDTH,
+                    height=self.env.IMAGE_HEIGHT,
+                    camera="top_down",
+                )
+                xs = coords[:, 0]
+                ys = coords[:, 1]
+                zs = coords[:, 2]
+                valid_flat = (
+                    (zs >= min_z)
+                    & (ys >= min_y)
+                    & (ys <= max_y)
+                    & (xs >= min_x)
+                    & (xs <= max_x)
+                )
+                valid = valid_flat.reshape(self.HEIGHT, self.WIDTH)
+            except Exception as exc:
+                print(f"pixel_2_world_batch failed, falling back to loop: {exc}")
+
+        if valid is None:
+            valid = np.zeros((self.HEIGHT, self.WIDTH), dtype=bool)
+            for y in range(self.HEIGHT):
+                for x in range(self.WIDTH):
+                    try:
+                        coordinates = self.env.controller.pixel_2_world(
+                            pixel_x=x,
+                            pixel_y=y,
+                            depth=depth[y][x],
+                            height=self.env.IMAGE_HEIGHT,
+                            width=self.env.IMAGE_WIDTH,
+                        )
+                    except Exception:
+                        continue
+                    if (
+                        coordinates[2] >= min_z
+                        and min_y <= coordinates[1] <= max_y
+                        and min_x <= coordinates[0] <= max_x
+                    ):
+                        valid[y, x] = True
+
         full_mask = np.repeat(valid[np.newaxis, :, :], self.n_actions_2, axis=0)
-
         flat_mask = torch.tensor(full_mask.reshape(-1), dtype=torch.bool, device=device)
         return flat_mask
 
@@ -691,10 +715,6 @@ class Grasp_Agent:
 
         # Gradient accumulation to bypass GPU memory restrictions
         for i in range(NUMBER_ACCUMULATIONS_BEFORE_UPDATE):
-            # Transfer weights every TARGET_NETWORK_UPDATE steps
-            if GAMMA != 0.0:
-                if self.steps_done % TARGET_NETWORK_UPDATE == 0:
-                    self.target_net.load_state_dict(self.policy_net.state_dict())
 
             start_idx = i * MAX_POSSIBLE_SAMPLES
             end_idx = (i + 1) * MAX_POSSIBLE_SAMPLES
@@ -706,22 +726,27 @@ class Grasp_Agent:
                     device
                 )
             reward_batch = torch.cat(batch.reward[start_idx:end_idx]).to(device)
+            done_batch = torch.cat(batch.done[start_idx:end_idx]).to(device)
 
             # Current Q prediction of our policy net, for the actions we took
             batch_size = state_batch.size(0)
             q_values = self.policy_net(state_batch).view(batch_size, -1)
             q_pred = q_values.gather(1, action_batch)
-            # q_pred = self.policy_net(state_batch).gather(1, action_batch)
 
             if GAMMA == 0.0:
                 q_expected = reward_batch.float()
             else:
-                # Q prediction of the target net of the next state
-                next_q_values = self.target_net(next_state_batch).view(batch_size, -1)
-                q_next_state = next_q_values.max(1)[0].unsqueeze(1).detach()
+                # Double DQN Logic:
+                # 1. Select best action using Policy Net
+                next_q_values_policy = self.policy_net(next_state_batch).view(batch_size, -1)
+                best_actions = next_q_values_policy.max(1)[1].unsqueeze(1)
 
-                # Calulate expected Q value using Bellmann: Q_t = r + gamma*Q_t+1
-                q_expected = reward_batch + (GAMMA * q_next_state)
+                # 2. Evaluate that action using Target Net
+                next_q_values_target = self.target_net(next_state_batch).view(batch_size, -1)
+                q_next_state = next_q_values_target.gather(1, best_actions).detach()
+
+                # Calculate expected Q value: Q = r + gamma * Q_next * (1 - done)
+                q_expected = reward_batch + (GAMMA * q_next_state * (1.0 - done_batch))
 
             target_q = q_expected.detach()
             loss = (
@@ -733,6 +758,13 @@ class Grasp_Agent:
         self.last_100_loss.append(loss.item())
         # self.writer.add_scalar('Average loss', loss, global_step=self.steps_done)
         self.optimizer.step()
+        self.opt_steps += 1
+
+        # Soft update once per optimizer step (Polyak averaging)
+        if GAMMA != 0.0:
+            with torch.no_grad():
+                for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
+                    target_param.data.mul_(1.0 - TAU).add_(TAU * param.data)
 
         self.optimizer.zero_grad()
 
@@ -834,6 +866,7 @@ class Grasp_Agent:
                 her_state = self.transform_observation(her_observation)
                 reward_value = env.compute_reward(achieved_goal, future_goal)
                 reward_tensor = torch.tensor([[reward_value]], dtype=torch.float32)
+                done_tensor = torch.tensor([[float(transition["done"])]], dtype=torch.float32)
                 if GAMMA == 0.0:
                     self.memory.push(
                         her_state, transition["action"].clone(), reward_tensor
@@ -847,6 +880,7 @@ class Grasp_Agent:
                         transition["action"].clone(),
                         her_next_state,
                         reward_tensor,
+                        done_tensor,
                     )
                 total_added += 1
                 if reward_value > 0.0:
@@ -911,11 +945,12 @@ def main():
                         reward, env_action, grasp_success=info.get("grasp_success")
                     )
                     reward_tensor = torch.tensor([[reward]], dtype=torch.float32)
+                    done_tensor = torch.tensor([[float(done)]], dtype=torch.float32)
                     next_state = agent.transform_observation(next_observation)
                     if GAMMA == 0.0:
                         agent.memory.push(state, action, reward_tensor)
                     else:
-                        agent.memory.push(state, action, next_state, reward_tensor)
+                        agent.memory.push(state, action, next_state, reward_tensor, done_tensor)
 
                     if agent.use_her:
                         achieved_goal = info.get(
@@ -933,6 +968,7 @@ def main():
                                 "action": action.detach().clone(),
                                 "next_observation": copy.deepcopy(next_observation),
                                 "grasped": grasped,
+                                "done": done, # Cache done state for HER
                             }
                         )
                         print(
