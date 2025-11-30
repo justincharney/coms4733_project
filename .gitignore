@@ -25,3 +25,4 @@ renders
 *.pdf
 .DS_Store
 videos/
+*.png

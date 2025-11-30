@@ -56,6 +56,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.joint_to_body = {}
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
+        self.last_grasp_force = 0.0
         self.unreachable_goal = False
         self.unreachable_goal_count = 0
         # Conservative workspace limits shared with the agent's action mask.
@@ -200,20 +201,27 @@ class GraspEnv(gym.Env, utils.EzPickle):
             goal_before_action = self.desired_goal.copy()
             achieved_goal = self._get_end_effector_position()
 
-            # If goal slipped out of workspace, truncate early to avoid wasting steps
+            # If goal slipped out of workspace, select a new goal instead of truncating
             if not self._goal_in_workspace(goal_before_action):
-                self.unreachable_goal_count += 1
-                reward = -1.0
-                done = True
-                self.step_called += 1
-                info["desired_goal"] = goal_before_action.copy()
-                info["achieved_goal"] = achieved_goal.copy()
-                info["truncated"] = True
-                info["unreachable_goal"] = True
-                info["grasp_success"] = 0.0
-                info["is_success"] = 0.0
-                info["her_reward"] = 0.0
-                return self.current_observation, reward, done, info
+                goal_ok = self._set_new_goal(self.data.qpos)
+                if goal_ok:
+                    # Successfully selected a new goal, refresh and continue
+                    self._refresh_desired_goal()
+                    goal_before_action = self.desired_goal.copy()
+                else:
+                    # No valid goals remain, truncate the episode
+                    self.unreachable_goal_count += 1
+                    reward = -1.0
+                    done = True
+                    self.step_called += 1
+                    info["desired_goal"] = goal_before_action.copy()
+                    info["achieved_goal"] = achieved_goal.copy()
+                    info["truncated"] = True
+                    info["unreachable_goal"] = True
+                    info["grasp_success"] = 0.0
+                    info["is_success"] = 0.0
+                    info["her_reward"] = 0.0
+                    return self.current_observation, reward, done, info
             self.last_grasped_object_pose = None
             self.last_grasped_object_name = None
 
@@ -327,6 +335,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
         info["is_success"] = float(grasped_something)
         info["her_reward"] = her_reward
         info["grasp_success"] = 1.0 if grasped_something else 0.0
+        info["grasp_force"] = self.last_grasp_force
 
         return self.current_observation, reward, done, info
 
@@ -428,6 +437,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
             steps2 = 0
             result_grasp = False
             reach_success = False
+            self.last_grasp_force = 0.0
 
         else:
             # Rotate gripper according to second action dimension
@@ -443,7 +453,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
             coordinates_2[2] = max(self.TABLE_HEIGHT, coordinates_2[2] - 0.01)
             result2 = self.controller.move_ee(
                 coordinates_2,
-                max_steps=300,
+                max_steps=500,
                 quiet=True,
                 render=render,
                 marker=markers,
@@ -457,15 +467,20 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 result2 = "Could not reach target location"
                 result_grasp = False
                 reach_success = False
+                self.last_grasp_force = 0.0
 
             else:
                 reach_success = True
                 self.controller.stay(100, render=render)
-                result_grasp = self.controller.grasp(
-                    render=render, quiet=True, marker=markers, plot=plot
+                # Use force-based grasp detection instead of position-based
+                result_grasp, grasp_force = self.controller.grasp_with_force_feedback(
+                    render=render, quiet=True
                 )
                 if result_grasp:
                     self._capture_grasp_snapshot()
+                    self.last_grasp_force = grasp_force
+                else:
+                    self.last_grasp_force = 0.0
 
         self.controller.actuators[0][4].Kp = 10.0
 
@@ -505,24 +520,23 @@ class GraspEnv(gym.Env, utils.EzPickle):
 
         # self.controller.stay(500)
 
-        result_final = "Skipped"
+        # Final verification at drop position using force-based detection
+        final_grasp_confirmed = False
+        final_grasp_force = 0.0
 
         if result_grasp:
-            if not self.demo_mode:
-                # Perform check if object is in gripper
-                result_final = self.controller.close_gripper(
-                    max_steps=1000, render=render, quiet=True, marker=markers, plot=plot
+            # Verify object is still in gripper using force feedback
+            max_verify_steps = 500 if not self.demo_mode else 100
+            final_grasp_confirmed, final_grasp_force, _ = (
+                self.controller.close_until_resistance(
+                    max_steps=max_verify_steps, render=render, quiet=True
                 )
-            else:
-                result_final = self.controller.close_gripper(
-                    max_steps=100, render=render, quiet=True, marker=markers, plot=plot
-                )
+            )
+            # Update grasp force to reflect final state (object may have slipped)
+            self.last_grasp_force = final_grasp_force
 
-        final_str = "Nothing in the gripper"
-        if result_final[:3] == "max":
-            final_str = "Object in the gripper"
-
-        grasped_something = result_final[:3] == "max" and result_grasp
+        final_str = "Object in the gripper" if final_grasp_confirmed else "Nothing in the gripper"
+        grasped_something = final_grasp_confirmed and result_grasp
         if not grasped_something:
             self.last_grasped_object_pose = None
             self.last_grasped_object_name = None
@@ -737,6 +751,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.controller.stay(5000, render=self.render_enabled)
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
+        self.last_grasp_force = 0.0
         self.last_achieved_goal = self._get_end_effector_position()
         # return an observation image
         return self.get_observation(show=self.show_observations)
