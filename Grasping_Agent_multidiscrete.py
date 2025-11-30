@@ -35,6 +35,11 @@ WIDTH = 200
 N_EPISODES = 1000
 STEPS_PER_EPISODE = 80
 MEMORY_SIZE = 60000
+RECORD_VIDEO = True  # Enable video recording
+VIDEO_RECORD_INTERVAL = 50  # Record every N episodes
+VIDEO_FPS = 30
+VIDEO_WIDTH = 640
+VIDEO_HEIGHT = 480
 MAX_POSSIBLE_SAMPLES = 12  # Number of transitions that fits on GPU memory for one backward-call (12 for RGB-D)
 NUMBER_ACCUMULATIONS_BEFORE_UPDATE = (
     8  # How often to accumulate gradients before updating
@@ -80,6 +85,69 @@ else:
 
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class VideoRecorder:
+    """Records frames from the environment and saves them as a video file."""
+
+    def __init__(
+        self, output_path, fps=VIDEO_FPS, width=VIDEO_WIDTH, height=VIDEO_HEIGHT
+    ):
+        self.output_path = output_path
+        self.fps = fps
+        self.width = width
+        self.height = height
+        self.frames = []
+        self.writer = None
+
+    def capture_frame(self, controller, camera="top_down"):
+        """Capture a frame from the specified camera."""
+        rgb, _ = controller.get_image_data(
+            width=self.width, height=self.height, camera=camera, show=False
+        )
+        self.frames.append(rgb)
+
+    def save(self):
+        """Save all captured frames to a video file."""
+        if not self.frames:
+            print(colored("No frames to save!", color="yellow"))
+            return None
+
+        # Ensure output directory exists
+        output_dir = Path(self.output_path).parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use XVID codec for .avi or mp4v for .mp4
+        if self.output_path.endswith(".mp4"):
+            fourcc = cv.VideoWriter_fourcc(*"mp4v")
+        else:
+            fourcc = cv.VideoWriter_fourcc(*"XVID")
+
+        self.writer = cv.VideoWriter(
+            self.output_path, fourcc, self.fps, (self.width, self.height)
+        )
+
+        for frame in self.frames:
+            # Convert RGB to BGR for OpenCV
+            bgr_frame = cv.cvtColor(frame, cv.COLOR_RGB2BGR)
+            self.writer.write(bgr_frame)
+
+        self.writer.release()
+        print(
+            colored(
+                f"Saved video ({len(self.frames)} frames) to {self.output_path}",
+                color="green",
+                attrs=["bold"],
+            )
+        )
+        return self.output_path
+
+    def reset(self):
+        """Clear all captured frames for a new recording."""
+        self.frames = []
+
+    def __len__(self):
+        return len(self.frames)
 
 
 class Tee:
@@ -226,6 +294,20 @@ class Grasp_Agent:
                 render=False,
             )
             # self.env = gym.make('gym_grasper:Grasper-v0', image_height=HEIGHT, image_width=WIDTH)
+
+            clear_dirs = [
+                Path("runs"),
+                Path("renders"),
+                Path("observations"),
+                Path("videos"),
+            ]
+            for dir_path in clear_dirs:
+                if dir_path.exists():
+                    import shutil
+
+                    shutil.rmtree(dir_path)
+                    print(f"Cleared {dir_path}/")
+                dir_path.mkdir(exist_ok=True)
         else:
             self.env = gym.make(
                 "gym_grasper:Grasper-v0",
@@ -369,7 +451,7 @@ class Grasp_Agent:
                 self.greedy_rotations = defaultdict(int)
                 self.greedy_rotations_successes = defaultdict(int)
                 self.random_rotations_successes = defaultdict(int)
-            self.opt_steps = 0 # Optimization steps counter
+            self.opt_steps = 0  # Optimization steps counter
             # Tensorboard setup
             self.writer = SummaryWriter(comment=self.DESCRIPTION)
             sample_input = torch.zeros(
@@ -393,8 +475,10 @@ class Grasp_Agent:
         # Get workspace bounds
         bounds = getattr(self.env, "workspace_bounds", None)
         if not bounds:
-            raise ValueError("Environment must define 'workspace_bounds' to ensure agent-environment sync.")
-            
+            raise ValueError(
+                "Environment must define 'workspace_bounds' to ensure agent-environment sync."
+            )
+
         min_x, max_x = bounds["x"]
         min_y, max_y = bounds["y"]
         min_z = self.env.TABLE_HEIGHT - 0.01
@@ -715,7 +799,6 @@ class Grasp_Agent:
 
         # Gradient accumulation to bypass GPU memory restrictions
         for i in range(NUMBER_ACCUMULATIONS_BEFORE_UPDATE):
-
             start_idx = i * MAX_POSSIBLE_SAMPLES
             end_idx = (i + 1) * MAX_POSSIBLE_SAMPLES
 
@@ -738,11 +821,15 @@ class Grasp_Agent:
             else:
                 # Double DQN Logic:
                 # 1. Select best action using Policy Net
-                next_q_values_policy = self.policy_net(next_state_batch).view(batch_size, -1)
+                next_q_values_policy = self.policy_net(next_state_batch).view(
+                    batch_size, -1
+                )
                 best_actions = next_q_values_policy.max(1)[1].unsqueeze(1)
 
                 # 2. Evaluate that action using Target Net
-                next_q_values_target = self.target_net(next_state_batch).view(batch_size, -1)
+                next_q_values_target = self.target_net(next_state_batch).view(
+                    batch_size, -1
+                )
                 q_next_state = next_q_values_target.gather(1, best_actions).detach()
 
                 # Calculate expected Q value: Q = r + gamma * Q_next * (1 - done)
@@ -763,7 +850,9 @@ class Grasp_Agent:
         # Soft update once per optimizer step (Polyak averaging)
         if GAMMA != 0.0:
             with torch.no_grad():
-                for target_param, param in zip(self.target_net.parameters(), self.policy_net.parameters()):
+                for target_param, param in zip(
+                    self.target_net.parameters(), self.policy_net.parameters()
+                ):
                     target_param.data.mul_(1.0 - TAU).add_(TAU * param.data)
 
         self.optimizer.zero_grad()
@@ -866,7 +955,9 @@ class Grasp_Agent:
                 her_state = self.transform_observation(her_observation)
                 reward_value = env.compute_reward(achieved_goal, future_goal)
                 reward_tensor = torch.tensor([[reward_value]], dtype=torch.float32)
-                done_tensor = torch.tensor([[float(transition["done"])]], dtype=torch.float32)
+                done_tensor = torch.tensor(
+                    [[float(transition["done"])]], dtype=torch.float32
+                )
                 if GAMMA == 0.0:
                     self.memory.push(
                         her_state, transition["action"].clone(), reward_tensor
@@ -892,6 +983,9 @@ class Grasp_Agent:
 def main():
     log_path = setup_run_logging()
     run_tag = Path(log_path).stem
+    videos_dir = Path("videos")
+    videos_dir.mkdir(exist_ok=True)
+
     for rand_seed in [999]:
         for lr in [0.0005]:
             LOAD_PATH = "DQN_RESNET_LR_0.001_OPTIM_ADAM_H_200_W_200_STEPS_35000_BUFFER_SIZE_2000_BATCH_SIZE_12_SEED_81_9_7_2020_9_52_weights.pt"
@@ -901,7 +995,31 @@ def main():
             )
             scene_captured = False
             agent.optimizer.zero_grad()
+
+            # Initialize video recorder
+            video_recorder = None
+
             for episode in range(1, N_EPISODES + 1):
+                # Check if we should record this episode
+                should_record = RECORD_VIDEO and (
+                    episode % VIDEO_RECORD_INTERVAL == 0 or episode == 1
+                )
+                if should_record:
+                    video_path = str(videos_dir / f"{run_tag}_episode_{episode}.mp4")
+                    video_recorder = VideoRecorder(video_path)
+                    # Pass recorder to controller for frame capture during motion
+                    agent.env.controller.video_recorder = video_recorder
+                    print(
+                        colored(
+                            f"Recording episode {episode} to video...",
+                            color="cyan",
+                            attrs=["bold"],
+                        )
+                    )
+                else:
+                    # Ensure no recorder is set for non-recorded episodes
+                    agent.env.controller.video_recorder = None
+
                 observation = agent.env.reset()
                 agent.maybe_save_goal_heatmap_example(observation)
                 if not scene_captured:
@@ -913,6 +1031,7 @@ def main():
                         height=960,
                     )
                     scene_captured = True
+
                 state = agent.transform_observation(observation)
                 episode_transitions = []
                 print(
@@ -950,7 +1069,9 @@ def main():
                     if GAMMA == 0.0:
                         agent.memory.push(state, action, reward_tensor)
                     else:
-                        agent.memory.push(state, action, next_state, reward_tensor, done_tensor)
+                        agent.memory.push(
+                            state, action, next_state, reward_tensor, done_tensor
+                        )
 
                     if agent.use_her:
                         achieved_goal = info.get(
@@ -968,7 +1089,7 @@ def main():
                                 "action": action.detach().clone(),
                                 "next_observation": copy.deepcopy(next_observation),
                                 "grasped": grasped,
-                                "done": done, # Cache done state for HER
+                                "done": done,  # Cache done state for HER
                             }
                         )
                         print(
@@ -1003,6 +1124,12 @@ def main():
                             attrs=["bold"],
                         )
                     )
+
+                # Save video at end of episode if recording
+                if should_record and video_recorder:
+                    video_recorder.save()
+                    agent.env.controller.video_recorder = None
+                    video_recorder = None
 
             if SAVE_WEIGHTS:
                 torch.save(

@@ -170,6 +170,8 @@ class MJ_Controller(object):
         self.cam_init = False
         self.last_movement_steps = 0
         self._render_unavailable = False
+        self.video_recorder = None  # Set externally to capture frames during motion
+        self.video_capture_every_n_steps = 5  # Capture frame every N simulation steps
         # self.move_group_to_joint_target()
 
     def _id2name(self, obj_type, idx):
@@ -563,6 +565,9 @@ class MJ_Controller(object):
                     self.render_counter += 1
                     if self.render_counter % self.render_every_n_steps == 0:
                         self.viewer.render()
+                # Capture video frame periodically
+                if self.video_recorder is not None and steps % self.video_capture_every_n_steps == 0:
+                    self.capture_video_frame()
                 steps += 1
 
             self.last_movement_steps = steps
@@ -832,10 +837,15 @@ class MJ_Controller(object):
         # print('Holding position!')
         starting_time = time.time()
         elapsed = 0
+        frame_counter = 0
         while elapsed < duration:
             self.move_group_to_joint_target(
                 max_steps=10, tolerance=0.0000001, plot=False, quiet=True, render=render
             )
+            # Capture video frame periodically during stay
+            frame_counter += 1
+            if self.video_recorder is not None and frame_counter % 10 == 0:
+                self.capture_video_frame()
             elapsed = (time.time() - starting_time) * 1000
         # print('Moving on...')
 
@@ -1078,3 +1088,17 @@ class MJ_Controller(object):
     @property
     def last_steps(self):
         return self.last_movement_steps
+
+    def capture_video_frame(self, camera="top_down_wide"):
+        """Capture a frame for video recording if a recorder is set."""
+        if self.video_recorder is not None:
+            try:
+                rgb, _ = self.get_image_data(
+                    width=self.video_recorder.width,
+                    height=self.video_recorder.height,
+                    camera=camera,
+                    show=False,
+                )
+                self.video_recorder.frames.append(rgb)
+            except Exception as e:
+                pass  # Silently skip frame on error

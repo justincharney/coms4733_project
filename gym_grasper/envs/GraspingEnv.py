@@ -656,13 +656,38 @@ class GraspEnv(gym.Env, utils.EzPickle):
         except ValueError:
             self.ee_body_id = None
 
+        # Place objects with minimum spacing to avoid overlap
+        min_spacing = 0.08  # Minimum distance between object centers (in meters)
+        placed_positions = []
+
         for joint_name in self.object_joint_names:
             start, end = self.controller.get_joint_qpos_addr(joint_name)
-            qpos[start] = np.random.uniform(low=-0.25, high=0.25)
-            qpos[start + 1] = np.random.uniform(low=-0.65, high=-0.45)
-            # qpos[start+2] = 1.0
+
+            # Try to find a non-overlapping position
+            max_attempts = 50
+            for attempt in range(max_attempts):
+                x = np.random.uniform(low=-0.25, high=0.25)
+                y = np.random.uniform(low=-0.65, high=-0.45)
+
+                # Check distance to all previously placed objects
+                valid_position = True
+                for px, py in placed_positions:
+                    dist = np.sqrt((x - px) ** 2 + (y - py) ** 2)
+                    if dist < min_spacing:
+                        valid_position = False
+                        break
+
+                if valid_position:
+                    break
+
+            # Use the position (even if not ideal after max_attempts)
+            qpos[start] = x
+            qpos[start + 1] = y
+            placed_positions.append((x, y))
+
             qpos[start + 2] = np.random.uniform(low=1.0, high=1.5)
             qpos[start + 3 : end] = Quaternion.random().unit.elements
+
         goal_ok = self._set_new_goal(qpos)
         self.unreachable_goal = not goal_ok
 

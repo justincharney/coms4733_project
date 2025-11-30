@@ -113,7 +113,7 @@ Control Engineering / Automation Engineering
         <!--Camera parameters-->
         <camera name="main1" mode="fixed" target="ee_link" pos="2 2 2.7" axisangle="2 2 -2 1"/>
         <camera name="top_down" mode="fixed" target="ee_link" pos="0 -0.6 2.0" axisangle="2 2 2 0"/>
-        <camera name="top_down_wide" mode="fixed" target="box_link" pos="0 -3 3.2" fovy="70" axisangle="1 0 0 1"/>
+        <camera name="top_down_wide" mode="fixed" target="box_link" pos="0 -2 2" fovy="70" axisangle="1 0 0 1"/>
         <camera name="side" mode="fixed" target="ee_link" pos="2.0 -0.6 1.0" quat="0.5 0.5 0.5 0.5" fovy="70"/>
         <!--Floor Property-->
         <geom name='floor' material="floor_mat" pos='0 0 0' size='2.5 2.5 0.1'  type='plane' />
