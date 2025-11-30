@@ -302,10 +302,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 reward = 5.0
             elif not reach_success:
                 # Explicit penalty for IK/reach failures
-                reward = -1.0
+                reward = -0.2
             else:
                 # Distance-based shaping reward (negative) to guide the agent to the object
-                reward = her_reward
+                reward = max(-0.5, her_reward)
 
             if self.initialized:
                 print(

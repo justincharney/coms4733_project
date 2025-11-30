@@ -400,14 +400,14 @@ class MJ_Controller(object):
         )  # Wrist 3 Joint
         self.controller_list.append(
             PID(
-                2.5 * p_scale,
+                4.0 * p_scale,
                 i_gripper,
-                0.00 * d_scale,
+                0.05 * d_scale,
                 setpoint=0.0,
                 output_limits=(-1, 1),
                 sample_time=sample_time,
             )
-        )  # Gripper Joint
+        )  # Gripper Joint - increased P gain for stronger grip
         # self.controller_list.append(PID(10.5*p_scale, 0.2, 0.1*d_scale, setpoint=0.0, output_limits=(-1, 1), sample_time=sample_time)) # Gripper Joint
         # self.controller_list.append(PID(2*p_scale, 0.1*i_scale, 0.05*d_scale, setpoint=0.2, output_limits=(-0.5, 0.8), sample_time=sample_time)) # Finger 2 Joint 1
         # self.controller_list.append(PID(1*p_scale, 0.1*i_scale, 0.05*d_scale, setpoint=0.0, output_limits=(-0.5, 0.8), sample_time=sample_time)) # Middle Finger Joint 1
@@ -617,8 +617,9 @@ class MJ_Controller(object):
         # result = self.move_group_to_joint_target(group='Gripper', target=[-0.4], tolerance=0.05, **kwargs)
         # print('Closed: ', self.sim.data.qpos[self.actuated_joint_ids][self.groups['Gripper']])
         # result = self.move_group_to_joint_target(group='Gripper', target=[0.45, 0.45, 0.55, -0.17], tolerance=0.05, max_steps=max_steps, render=render, marker=True, quiet=quiet, plot=plot)
+        # Close more aggressively: joint range is [-1, 1], so -0.8 gives tighter grip
         return self.move_group_to_joint_target(
-            group="Gripper", target=[-0.4], tolerance=0.01, **kwargs
+            group="Gripper", target=[-0.8], tolerance=0.01, **kwargs
         )
 
     def grasp(self, **kwargs):
@@ -627,7 +628,8 @@ class MJ_Controller(object):
         Attempts a grasp at the current location and prints some feedback on weather it was successful
         """
 
-        result = self.close_gripper(max_steps=300, **kwargs)
+        # Increased max_steps from 300 to 500 to give gripper more time to close around objects
+        result = self.close_gripper(max_steps=500, **kwargs)
 
         return result != "success"
 

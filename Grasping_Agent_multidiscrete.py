@@ -47,20 +47,20 @@ NUMBER_ACCUMULATIONS_BEFORE_UPDATE = (
 BATCH_SIZE = (
     MAX_POSSIBLE_SAMPLES * NUMBER_ACCUMULATIONS_BEFORE_UPDATE
 )  # Effective batch size
-GAMMA = 0.9
+GAMMA = 0.95
 TARGET_NETWORK_UPDATE = 1000
-LEARNING_RATE = 0.0003
+LEARNING_RATE = 1e-4
 EPS_STEADY = 0.0
 EPS_START = 1.0
 EPS_END = 0.05
-EPS_DECAY = 15000
+EPS_DECAY = 25000
 SAVE_WEIGHTS = True
 MODEL = "RESNET"
 ALGORITHM = "DQN"
 OPTIMIZER = "ADAM"
 USE_HER = True
-HER_FUTURE_K = 4
-TAU = 0.005 # Soft update parameter
+HER_FUTURE_K = 2
+TAU = 0.001  # Soft update parameter
 
 if torch.cuda.is_available():
     device = torch.device("cuda")
@@ -810,6 +810,9 @@ class Grasp_Agent:
                 )
             reward_batch = torch.cat(batch.reward[start_idx:end_idx]).to(device)
             done_batch = torch.cat(batch.done[start_idx:end_idx]).to(device)
+
+            # Clip reward batch
+            reward_batch = torch.clamp(reward_batch, min=-1.0, max=1.0)
 
             # Current Q prediction of our policy net, for the actions we took
             batch_size = state_batch.size(0)
