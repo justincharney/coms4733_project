@@ -614,12 +614,11 @@ class MJ_Controller(object):
         Closes the gripper while keeping the arm in a steady position.
         """
 
-        # result = self.move_group_to_joint_target(group='Gripper', target=[-0.4], tolerance=0.05, **kwargs)
-        # print('Closed: ', self.sim.data.qpos[self.actuated_joint_ids][self.groups['Gripper']])
-        # result = self.move_group_to_joint_target(group='Gripper', target=[0.45, 0.45, 0.55, -0.17], tolerance=0.05, max_steps=max_steps, render=render, marker=True, quiet=quiet, plot=plot)
-        # Close more aggressively: joint range is [-1, 1], so -0.8 gives tighter grip
+        # Close to near the joint limit. Using -0.9 instead of -1.0 so the gripper
+        # can actually reach this target when empty. Grasp detection works by checking
+        # if the gripper couldn't reach its target (something blocking it = successful grasp).
         return self.move_group_to_joint_target(
-            group="Gripper", target=[-0.8], tolerance=0.01, **kwargs
+            group="Gripper", target=[-0.9], tolerance=0.05, **kwargs
         )
 
     def grasp(self, **kwargs):
