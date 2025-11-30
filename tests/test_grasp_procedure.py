@@ -131,19 +131,13 @@ class TestGraspProcedure:
         gripper_pos_before_close = controller.get_gripper_position()
         print(f"Gripper position before close: {gripper_pos_before_close:.4f}")
 
-        # Step 6: Close gripper with force feedback
-        print("\n=== Step 6: Close gripper (force-based) ===")
-        grasped, force, final_pos = controller.close_until_resistance(
-            max_steps=1000, render=False, quiet=False
-        )
-        print(
-            f"Grasped: {grasped}, Force: {force:.2f} N, Final position: {final_pos:.4f}"
-        )
-        save_render(controller, "6_gripper_closed", "top_down_wide")
-
-        # Verify gripper actually moved (closed)
+        # Step 6: Close gripper (position-based detection)
+        print("\n=== Step 6: Close gripper (position-based) ===")
+        # grasp() returns True if gripper couldn't fully close (something blocking)
+        grasped = controller.grasp(render=False, quiet=False)
         gripper_pos_after_close = controller.get_gripper_position()
-        print(f"Gripper position after close: {gripper_pos_after_close:.4f}")
+        print(f"Grasped: {grasped}, Final position: {gripper_pos_after_close:.4f}")
+        save_render(controller, "6_gripper_closed", "top_down_wide")
 
         # The gripper should have moved toward closed position (more negative)
         assert gripper_pos_after_close < gripper_pos_before_close, (
@@ -161,33 +155,28 @@ class TestGraspProcedure:
         print(f"Result: {result7}")
         save_render(controller, "7_lifted", "top_down_wide")
 
-        contact_force_after_lift = controller.get_gripper_contact_force()
-        print(f"Contact force after lift: {contact_force_after_lift:.2f} N")
-
-        # Step 8: Check if something is in the gripper
+        # Step 8: Check if something is in the gripper (position-based verification)
         print("\n=== Step 8: Final grasp verification ===")
-        # Re-verify grip by checking force and position
-        verify_grasped, verify_force, verify_pos = controller.close_until_resistance(
-            max_steps=200, render=False, quiet=True
-        )
+        # Try to close gripper further
+        controller.close_gripper(max_steps=200, render=False, quiet=True)
         gripper_final_pos = controller.get_gripper_position()
 
-        # Object is in gripper if: force detected AND gripper not fully closed
-        fully_closed_threshold = -0.90
-        has_object = verify_force > 1.0 and gripper_final_pos > fully_closed_threshold
+        # Empty gripper closes to approximately -0.39. If position is more open, object is there.
+        FULLY_CLOSED_POSITION = -0.38
+        has_object = gripper_final_pos > FULLY_CLOSED_POSITION
 
-        print(f"Verification force: {verify_force:.2f} N")
         print(f"Gripper final position: {gripper_final_pos:.4f}")
-        print(f"Fully closed threshold: {fully_closed_threshold}")
+        print(f"Fully closed threshold: {FULLY_CLOSED_POSITION}")
         if has_object:
-            print(">>> OBJECT IN GRIPPER: YES <<<")
+            print(
+                f">>> OBJECT IN GRIPPER: YES (position {gripper_final_pos:.4f} > {FULLY_CLOSED_POSITION}) <<<"
+            )
         else:
-            if gripper_final_pos <= fully_closed_threshold:
-                print(">>> OBJECT IN GRIPPER: NO (gripper fully closed - nothing blocking) <<<")
-            else:
-                print(f">>> OBJECT IN GRIPPER: NO (low force: {verify_force:.2f} N) <<<")
+            print(
+                f">>> OBJECT IN GRIPPER: NO (position {gripper_final_pos:.4f} <= {FULLY_CLOSED_POSITION}) <<<"
+            )
 
-        print(f"\n=== Test complete! Check {RENDER_DIR}/ for images ===")
+        print(f"\n=== Test complete! Check {RENDER_DIR}/ for images ===\n")
 
 
 class TestGripperClosing:
@@ -202,99 +191,44 @@ class TestGripperClosing:
         open_pos = controller.get_gripper_position()
         print(f"Open position: {open_pos:.4f}")
 
-        # Close gripper on empty space
-        grasped, force, final_pos = controller.close_until_resistance(
-            max_steps=500, render=False, quiet=True
-        )
+        # Close gripper on empty space using position-based grasp()
+        # grasp() returns True if gripper couldn't fully close (something blocking)
+        grasped = controller.grasp(render=False, quiet=True)
 
         closed_pos = controller.get_gripper_position()
         print(f"Closed position: {closed_pos:.4f}")
-        print(f"Grasped: {grasped}, Force: {force:.2f} N")
+        print(f"Grasped (detected object): {grasped}")
 
         # Verify gripper moved from open to closed
         assert closed_pos < open_pos - 0.5, (
             f"Gripper did not close enough. Open: {open_pos:.4f}, Closed: {closed_pos:.4f}"
         )
 
-        # Should NOT detect a grasp (empty)
+        # Should NOT detect a grasp (empty) - gripper should reach target
         assert not grasped, "Gripper incorrectly detected grasp on empty space"
 
-        # Force should be 0 (finger-to-finger excluded)
-        assert force < 0.1, f"Force should be ~0 for empty gripper, got {force:.2f} N"
-
     def test_gripper_position_changes_during_close(self, env_and_controller):
-        """Test that gripper position actually changes during close_until_resistance."""
+        """Test that gripper position actually changes during close_gripper."""
         env, controller, obs = env_and_controller
 
         # Open gripper
         controller.open_gripper(render=False, quiet=True)
+        open_pos = controller.get_gripper_position()
 
-        positions = []
-        gripper_idx = controller.groups["Gripper"][0]
-        fully_closed = -0.95
+        # Close gripper
+        result = controller.close_gripper(max_steps=500, render=False, quiet=True)
 
-        # Set target to fully closed
-        controller.actuators[gripper_idx][4].setpoint = fully_closed
-
-        # Manually step through and record positions
-        for step in range(200):
-            current_pos = controller.get_gripper_position()
-            positions.append(current_pos)
-
-            # Apply PID control
-            output = controller.actuators[gripper_idx][4](current_pos)
-            controller.sim.data.ctrl[gripper_idx] = output
-            controller.sim.step()
-
-            # Check if reached target
-            if abs(current_pos - fully_closed) < 0.05:
-                break
-
-        positions = np.array(positions)
-        print(f"Position range: {positions.max():.4f} to {positions.min():.4f}")
-        print(f"Number of steps: {len(positions)}")
+        closed_pos = controller.get_gripper_position()
+        print(f"Position range: {open_pos:.4f} to {closed_pos:.4f}")
+        print(f"Close result: {result}")
 
         # Verify position decreased (gripper closed)
-        assert positions[-1] < positions[0] - 0.3, (
+        assert closed_pos < open_pos - 0.3, (
             f"Gripper position did not decrease enough during closing. "
-            f"Start: {positions[0]:.4f}, End: {positions[-1]:.4f}"
+            f"Start: {open_pos:.4f}, End: {closed_pos:.4f}"
         )
 
-
-class TestForceDetection:
-    """Test force-based grasp detection."""
-
-    def test_finger_to_finger_excluded(self, env_and_controller):
-        """Test that finger-to-finger contact is excluded from force calculation."""
-        env, controller, obs = env_and_controller
-
-        # Close gripper completely (fingers will touch)
-        controller.open_gripper(render=False, quiet=True)
-
-        # Force close to position where fingers touch
-        grasped, force, final_pos = controller.close_until_resistance(
-            max_steps=500, render=False, quiet=True
+        # When empty, gripper should reach target (success)
+        assert result == "success", (
+            f"Gripper should reach closed position when empty, got: {result}"
         )
-
-        print(f"Force when empty (fingers may touch): {force:.2f} N")
-
-        # Force should be 0 or very low (finger-to-finger excluded)
-        assert force < 1.0, (
-            f"Finger-to-finger contact should be excluded, but got force={force:.2f} N"
-        )
-
-    def test_gripper_geom_ids_identified(self, env_and_controller):
-        """Test that gripper geom IDs are correctly identified."""
-        env, controller, obs = env_and_controller
-
-        body_ids = controller._get_gripper_body_ids()
-        geom_ids = controller._get_gripper_geom_ids()
-
-        print(f"Gripper body IDs: {body_ids}")
-        print(f"Gripper geom IDs: {geom_ids}")
-
-        assert len(body_ids) > 0, "No gripper body IDs found"
-        assert len(geom_ids) > 0, "No gripper geom IDs found"
-
-        # Should have 4 gripper bodies (2 knuckles + 2 fingers)
-        assert len(body_ids) == 4, f"Expected 4 gripper bodies, got {len(body_ids)}"

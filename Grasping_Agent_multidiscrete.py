@@ -33,7 +33,7 @@ from Modules import MULTIDISCRETE_RESNET, ReplayBuffer, Transition, simple_Trans
 HEIGHT = 200
 WIDTH = 200
 N_EPISODES = 1000
-STEPS_PER_EPISODE = 80
+STEPS_PER_EPISODE = 50
 MEMORY_SIZE = 60000
 RECORD_VIDEO = True  # Enable video recording
 VIDEO_RECORD_INTERVAL = 1  # Record every episode
@@ -939,6 +939,15 @@ class Grasp_Agent:
                 global_step=self.steps_done,
             )
 
+    def log_grasp_force(self, grasp_force):
+        """Log grasp force measurement to TensorBoard."""
+        if grasp_force is not None and grasp_force > 0:
+            self.writer.add_scalar(
+                "Grasp/contact_force_N",
+                grasp_force,
+                global_step=self.steps_done,
+            )
+
     def apply_her(self, episode_transitions):
         if not self.use_her or not episode_transitions:
             return 0, 0
@@ -1066,6 +1075,7 @@ def main():
                     agent.update_tensorboard(
                         reward, env_action, grasp_success=info.get("grasp_success")
                     )
+                    agent.log_grasp_force(info.get("grasp_force"))
                     reward_tensor = torch.tensor([[reward]], dtype=torch.float32)
                     done_tensor = torch.tensor([[float(done)]], dtype=torch.float32)
                     next_state = agent.transform_observation(next_observation)

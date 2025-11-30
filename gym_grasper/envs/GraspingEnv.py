@@ -56,7 +56,6 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.joint_to_body = {}
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
-        self.last_grasp_force = 0.0
         self.unreachable_goal = False
         self.unreachable_goal_count = 0
         # Conservative workspace limits shared with the agent's action mask.
@@ -335,7 +334,6 @@ class GraspEnv(gym.Env, utils.EzPickle):
         info["is_success"] = float(grasped_something)
         info["her_reward"] = her_reward
         info["grasp_success"] = 1.0 if grasped_something else 0.0
-        info["grasp_force"] = self.last_grasp_force
 
         return self.current_observation, reward, done, info
 
@@ -428,63 +426,40 @@ class GraspEnv(gym.Env, utils.EzPickle):
             if result1 == "success":
                 result_pre = "Center"
 
-        # Check result1 for max steps reached => if so it got stuck in a bad position
-        if result1[:3] == "max":
-            result_rotate = "Skipped"
-            steps_rotate = 0
-            result2 = "Skipped"
-            coordinates_2 = None
-            steps2 = 0
-            result_grasp = False
-            reach_success = False
-            self.last_grasp_force = 0.0
+        # Rotate gripper according to second action dimension
+        result_rotate = self.rotate_wrist_3_joint_to_value(self.rotations[rotation])
+        steps_rotate = self.controller.last_steps
 
+        self.controller.open_gripper(half=True, render=render, quiet=True, plot=plot)
+
+        # Move to grasping height
+        coordinates_2 = copy.deepcopy(coordinates)
+        coordinates_2[2] = max(self.TABLE_HEIGHT, coordinates_2[2] - 0.01)
+        result2 = self.controller.move_ee(
+            coordinates_2,
+            max_steps=500,
+            quiet=True,
+            render=render,
+            marker=markers,
+            tolerance=0.02,
+            plot=plot,
+        )
+        steps2 = self.controller.last_steps
+
+        # Only attempt grasp if we reached the target position
+        reach_success = result2 == "success"
+        if reach_success:
+            self.controller.stay(100, render=render)
+            # Position-based grasp detection: if gripper can't fully close, something is blocking
+            result_grasp = self.controller.grasp(render=render, quiet=True)
+            if result_grasp:
+                self._capture_grasp_snapshot()
         else:
-            # Rotate gripper according to second action dimension
-            result_rotate = self.rotate_wrist_3_joint_to_value(self.rotations[rotation])
-            steps_rotate = self.controller.last_steps
-
-            self.controller.open_gripper(
-                half=True, render=render, quiet=True, plot=plot
-            )
-
-            # Move to grasping height
-            coordinates_2 = copy.deepcopy(coordinates)
-            coordinates_2[2] = max(self.TABLE_HEIGHT, coordinates_2[2] - 0.01)
-            result2 = self.controller.move_ee(
-                coordinates_2,
-                max_steps=500,
-                quiet=True,
-                render=render,
-                marker=markers,
-                tolerance=0.01,
-                plot=plot,
-            )
-            steps2 = self.controller.last_steps
-
-            # If we can't reach the desired grasping position, don't grasp
-            if result2[:3] == "max":
-                result2 = "Could not reach target location"
-                result_grasp = False
-                reach_success = False
-                self.last_grasp_force = 0.0
-
-            else:
-                reach_success = True
-                self.controller.stay(100, render=render)
-                # Use force-based grasp detection instead of position-based
-                result_grasp, grasp_force = self.controller.grasp_with_force_feedback(
-                    render=render, quiet=True
-                )
-                if result_grasp:
-                    self._capture_grasp_snapshot()
-                    self.last_grasp_force = grasp_force
-                else:
-                    self.last_grasp_force = 0.0
+            result_grasp = False
 
         self.controller.actuators[0][4].Kp = 10.0
 
-        # Move back above center of table
+        # Move back above center of table (lift)
         result3 = self.controller.move_ee(
             [0.0, -0.6, 1.1],
             max_steps=1000,
@@ -495,6 +470,26 @@ class GraspEnv(gym.Env, utils.EzPickle):
             tolerance=0.05,
         )
         steps3 = self.controller.last_steps
+
+        # Verify grasp immediately after lifting (position-based check)
+        # Empty gripper closes to approximately -0.39. If gripper position is
+        # significantly different (more open), an object is blocking it.
+        final_grasp_confirmed = False
+        FULLY_CLOSED_POSITION = -0.38  # Empty gripper baseline
+
+        if result_grasp:
+            # Try to close gripper further
+            self.controller.close_gripper(max_steps=200, render=render, quiet=True)
+            gripper_pos = self.controller.get_gripper_position()
+            # Object is in gripper if position is significantly more open than fully closed
+            final_grasp_confirmed = gripper_pos > FULLY_CLOSED_POSITION
+
+        final_str = (
+            "Object in the gripper"
+            if final_grasp_confirmed
+            else "Nothing in the gripper"
+        )
+        grasped_something = final_grasp_confirmed and result_grasp
 
         # Move to drop position
         drop_target = np.array([0.6, 0.0, 1.15], dtype=np.float32)
@@ -517,26 +512,6 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 result4 = f"success (within {drop_err:.3f} m of drop target)"
             else:
                 print(f"Drop failed. Distance to target: {drop_err:.3f} m")
-
-        # self.controller.stay(500)
-
-        # Final verification at drop position using force-based detection
-        final_grasp_confirmed = False
-        final_grasp_force = 0.0
-
-        if result_grasp:
-            # Verify object is still in gripper using force feedback
-            max_verify_steps = 500 if not self.demo_mode else 100
-            final_grasp_confirmed, final_grasp_force, _ = (
-                self.controller.close_until_resistance(
-                    max_steps=max_verify_steps, render=render, quiet=True
-                )
-            )
-            # Update grasp force to reflect final state (object may have slipped)
-            self.last_grasp_force = final_grasp_force
-
-        final_str = "Object in the gripper" if final_grasp_confirmed else "Nothing in the gripper"
-        grasped_something = final_grasp_confirmed and result_grasp
         if not grasped_something:
             self.last_grasped_object_pose = None
             self.last_grasped_object_name = None
@@ -587,10 +562,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
             steps2,
             "steps",
         )
-        print("Grasped anything?: ".ljust(40, " "), result_grasp)
-        print("Move to center: ".ljust(40, " "), result3, ",", steps3, "steps")
+        print("Initial grasp detected?: ".ljust(40, " "), result_grasp)
+        print("Move to center (lift): ".ljust(40, " "), result3, ",", steps3, "steps")
+        print("Object still in gripper?: ".ljust(40, " "), final_str)
         print("Move to drop position: ".ljust(40, " "), result4, ",", steps4, "steps")
-        print("Final finger check: ".ljust(40, " "), final_str)
         print("Open gripper: ".ljust(40, " "), result_open, ",", steps_open, "steps")
 
         if all(
@@ -751,7 +726,6 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.controller.stay(5000, render=self.render_enabled)
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
-        self.last_grasp_force = 0.0
         self.last_achieved_goal = self._get_end_effector_position()
         # return an observation image
         return self.get_observation(show=self.show_observations)
@@ -763,20 +737,24 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.last_achieved_goal = np.zeros(3, dtype=np.float32)
             return False
 
-        max_attempts = max(1, len(self.object_joint_names) * 2)
-        chosen_name = None
-        chosen_goal = None
+        # First, find all valid candidates (in workspace and with clearance)
+        valid_candidates = []
+        for joint_name in self.object_joint_names:
+            candidate_goal = self._goal_from_qpos(joint_name, qpos)
+            if self._goal_in_workspace(candidate_goal) and self._object_has_clearance(
+                joint_name, qpos
+            ):
+                valid_candidates.append((joint_name, candidate_goal))
 
-        for _ in range(max_attempts):
-            candidate_name = random.choice(self.object_joint_names)
-            candidate_goal = self._goal_from_qpos(candidate_name, qpos)
-            if self._goal_in_workspace(candidate_goal):
-                chosen_name = candidate_name
-                chosen_goal = candidate_goal
-                break
-
-        if chosen_name is None:
-            # Fallback: no reachable goals found, leave as zeros to avoid unreachable targets.
+        if not valid_candidates:
+            # No objects have sufficient clearance - truncate episode
+            print(
+                colored(
+                    "[Workspace] No objects with sufficient clearance for grasping",
+                    color="yellow",
+                    attrs=["bold"],
+                )
+            )
             self.goal_joint_name = None
             self.desired_goal = np.zeros(3, dtype=np.float32)
             self.target_body_id = None
@@ -784,6 +762,9 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 [0.0, -0.6, self.TABLE_HEIGHT], dtype=np.float32
             )
             return False
+
+        # Randomly select from valid candidates
+        chosen_name, chosen_goal = random.choice(valid_candidates)
 
         self.goal_joint_name = chosen_name
         self.desired_goal = chosen_goal
@@ -805,6 +786,30 @@ class GraspEnv(gym.Env, utils.EzPickle):
         x_min, x_max = self.workspace_bounds["x"]
         y_min, y_max = self.workspace_bounds["y"]
         return x_min <= goal[0] <= x_max and y_min <= goal[1] <= y_max
+
+    def _object_has_clearance(self, joint_name, qpos, min_clearance=0.06):
+        """
+        Check if an object has enough clearance from other objects for grasping.
+
+        Args:
+            joint_name: The joint name of the object to check.
+            qpos: Current qpos array.
+            min_clearance: Minimum distance (in meters) from other objects.
+
+        Returns:
+            bool: True if the object has sufficient clearance.
+        """
+        obj_pos = self._goal_from_qpos(joint_name, qpos)
+
+        for other_name in self.object_joint_names:
+            if other_name == joint_name:
+                continue
+            other_pos = self._goal_from_qpos(other_name, qpos)
+            # Check 2D distance (x, y) since z doesn't matter for gripper clearance
+            dist = np.linalg.norm(obj_pos[:2] - other_pos[:2])
+            if dist < min_clearance:
+                return False
+        return True
 
     def compute_reward(self, achieved_goal, desired_goal):
         achieved_goal = np.array(achieved_goal, dtype=np.float32)
