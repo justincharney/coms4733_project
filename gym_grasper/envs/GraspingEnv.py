@@ -720,10 +720,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
             group="All", target=qpos[self.controller.actuated_joint_ids]
         )
 
-        # Turn this on for training, so the objects drop down before the observation
-        self.controller.stay(1000, render=self.render_enabled)
+        # Wait for objects to settle before starting episode
+        self.controller.stay(2000, render=self.render_enabled)
         if self.demo_mode:
-            self.controller.stay(5000, render=self.render_enabled)
+            self.controller.stay(3000, render=self.render_enabled)
         self.last_grasped_object_pose = None
         self.last_grasped_object_name = None
         self.last_achieved_goal = self._get_end_effector_position()
@@ -787,7 +787,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
         y_min, y_max = self.workspace_bounds["y"]
         return x_min <= goal[0] <= x_max and y_min <= goal[1] <= y_max
 
-    def _object_has_clearance(self, joint_name, qpos, min_clearance=0.06):
+    def _object_has_clearance(self, joint_name, qpos, min_clearance=0.10):
         """
         Check if an object has enough clearance from other objects for grasping.
 
@@ -795,6 +795,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
             joint_name: The joint name of the object to check.
             qpos: Current qpos array.
             min_clearance: Minimum distance (in meters) from other objects.
+                           Default 0.10 allows for gripper width + object size + margin.
 
         Returns:
             bool: True if the object has sufficient clearance.
@@ -812,14 +813,18 @@ class GraspEnv(gym.Env, utils.EzPickle):
         return True
 
     def compute_reward(self, achieved_goal, desired_goal):
+        """
+        Compute reward based on distance between achieved and desired goal.
+        No step penalty needed - GAMMA discounting already incentivizes faster grasps.
+        """
         achieved_goal = np.array(achieved_goal, dtype=np.float32)
         desired_goal = np.array(desired_goal, dtype=np.float32)
         distance = np.linalg.norm(achieved_goal[:2] - desired_goal[:2])
+        if distance <= self.goal_tolerance:
+            return 0.5
         clipped_distance = min(distance, 1.0)
         shaping = -0.25 * clipped_distance
-        step_cost = -0.002
-        # success_bonus = 0.2 if distance <= self.goal_tolerance else 0.0
-        return shaping + step_cost
+        return shaping
 
     def _cache_object_metadata(self):
         if not hasattr(self, "model"):

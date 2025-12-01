@@ -35,7 +35,7 @@ WIDTH = 200
 N_EPISODES = 1000
 STEPS_PER_EPISODE = 50
 MEMORY_SIZE = 60000
-RECORD_VIDEO = True  # Enable video recording
+RECORD_VIDEO = False  # Enable video recording
 VIDEO_RECORD_INTERVAL = 1  # Record every episode
 VIDEO_FPS = 30
 VIDEO_WIDTH = 640
@@ -59,7 +59,7 @@ MODEL = "RESNET"
 ALGORITHM = "DQN"
 OPTIMIZER = "ADAM"
 USE_HER = True
-HER_FUTURE_K = 2
+HER_FUTURE_K = 4
 TAU = 0.001  # Soft update parameter
 
 if torch.cuda.is_available():
@@ -458,7 +458,6 @@ class Grasp_Agent:
                 1, self.input_channels, self.WIDTH, self.HEIGHT
             ).to(device)
             self.writer.add_graph(self.policy_net, sample_input)
-            self.last_1000_rewards = deque(maxlen=1000)
             self.last_100_loss = deque(maxlen=100)
             self.last_1000_actions = deque(maxlen=1000)
 
@@ -860,7 +859,7 @@ class Grasp_Agent:
 
         self.optimizer.zero_grad()
 
-    def update_tensorboard(self, reward, action, grasp_success=None):
+    def update_tensorboard(self, reward, action):
         """
         Method for keeping track of tensorboard metrics.
 
@@ -887,43 +886,6 @@ class Grasp_Agent:
                 bins=[i for i in range(self.n_actions_2)],
             )
 
-        if self.steps_done % 10 == 0:
-            self.writer.add_scalars(
-                "Total number of rotation actions/Greedy",
-                self.greedy_rotations,
-                self.steps_done,
-            )
-            self.writer.add_scalars(
-                "Total number of successful rotation actions/Greedy",
-                self.greedy_rotations_successes,
-                self.steps_done,
-            )
-            self.writer.add_scalars(
-                "Total number of successful rotation actions/Random",
-                self.random_rotations_successes,
-                self.steps_done,
-            )
-
-        self.last_1000_rewards.append(reward)
-
-        if len(self.last_1000_rewards) > 99:
-            if self.steps_done % 10 == 0:
-                last_100 = np.array([self.last_1000_rewards[i] for i in range(-100, 0)])
-                mean_reward_100 = np.mean(last_100)
-                self.writer.add_scalar(
-                    "Mean reward/Last100", mean_reward_100, global_step=self.steps_done
-                )
-            # grasps_in_last_100 = np.count_nonzero(last_100 == 1)
-            # self.writer.add_scalar('Number of succ. grasps in last 100 steps', grasps_in_last_100, global_step=self.steps_done)
-        if len(self.last_1000_rewards) > 999:
-            if self.steps_done % 10 == 0:
-                mean_reward_1000 = np.mean(self.last_1000_rewards)
-                self.writer.add_scalar(
-                    "Mean reward/Last1000",
-                    mean_reward_1000,
-                    global_step=self.steps_done,
-                )
-
         if len(self.last_100_loss) > 99:
             if self.steps_done % 10 == 0:
                 self.writer.add_scalar(
@@ -931,22 +893,6 @@ class Grasp_Agent:
                     np.mean(self.last_100_loss),
                     global_step=self.steps_done,
                 )
-
-        if grasp_success is not None and self.steps_done % 10 == 0:
-            self.writer.add_scalar(
-                "Grasp success/raw",
-                grasp_success,
-                global_step=self.steps_done,
-            )
-
-    def log_grasp_force(self, grasp_force):
-        """Log grasp force measurement to TensorBoard."""
-        if grasp_force is not None and grasp_force > 0:
-            self.writer.add_scalar(
-                "Grasp/contact_force_N",
-                grasp_force,
-                global_step=self.steps_done,
-            )
 
     def apply_her(self, episode_transitions):
         if not self.use_her or not episode_transitions:
@@ -1046,6 +992,9 @@ def main():
 
                 state = agent.transform_observation(observation)
                 episode_transitions = []
+                # Episode-level tracking
+                episode_reward = 0.0
+                first_grasp_step = None
                 print(
                     colored(
                         "CURRENT EPSILON: {}".format(agent.eps_threshold),
@@ -1072,10 +1021,12 @@ def main():
                     next_observation, reward, done, info = agent.env.unwrapped.step(
                         env_action, record_grasps=True, action_info=agent.last_action
                     )
-                    agent.update_tensorboard(
-                        reward, env_action, grasp_success=info.get("grasp_success")
-                    )
-                    agent.log_grasp_force(info.get("grasp_force"))
+                    agent.update_tensorboard(reward, env_action)
+
+                    # Track episode-level metrics
+                    episode_reward += reward
+                    if info.get("grasp_success", 0.0) > 0 and first_grasp_step is None:
+                        first_grasp_step = step
                     reward_tensor = torch.tensor([[reward]], dtype=torch.float32)
                     done_tensor = torch.tensor([[float(done)]], dtype=torch.float32)
                     next_state = agent.transform_observation(next_observation)
@@ -1137,6 +1088,24 @@ def main():
                             attrs=["bold"],
                         )
                     )
+
+                # Log episode-level metrics
+                agent.writer.add_scalar(
+                    "Episode/total_reward", episode_reward, global_step=episode
+                )
+                agent.writer.add_scalar("Episode/length", step, global_step=episode)
+                grasp_efficiency = 1.0 / first_grasp_step if first_grasp_step else 0.0
+                agent.writer.add_scalar(
+                    "Episode/grasp_efficiency", grasp_efficiency, global_step=episode
+                )
+                print(
+                    colored(
+                        f"[Episode {episode}] reward={episode_reward:.3f}, "
+                        f"steps={step}, efficiency={grasp_efficiency:.3f}",
+                        color="yellow",
+                        attrs=["bold"],
+                    )
+                )
 
                 # Save video at end of episode if recording
                 if should_record and video_recorder:
