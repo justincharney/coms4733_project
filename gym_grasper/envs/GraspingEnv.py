@@ -8,8 +8,6 @@ import copy
 import math
 import os
 import random
-import time
-import traceback
 from collections import defaultdict
 from pathlib import Path
 
@@ -21,17 +19,14 @@ from gym import spaces, utils
 from pyquaternion import Quaternion
 from termcolor import colored
 
-from decorators import *
 from gym_grasper.controller.MujocoController import (
-    DummyViewer,
     MJ_Controller,
     MjSimWrapper,
+    MuJoCoViewer,
 )
 
 
 class GraspEnv(gym.Env, utils.EzPickle):
-    # def __init__(self, file='/UR5+gripper/UR5gripper_2_finger.xml', image_width=200, image_height=200, show_obs=True, demo=False, render=False):
-    # def __init__(self, file='/UR5+gripper/UR5gripper_2_finger.xml', image_width=200, image_height=200, show_obs=True, demo=False, render=False):
     def __init__(
         self,
         file="/UR5+gripper/UR5gripper_2_finger_many_objects.xml",
@@ -76,7 +71,11 @@ class GraspEnv(gym.Env, utils.EzPickle):
             "render.modes": ["human", "rgb_array"],
             "video.frames_per_second": int(np.round(1 / self.dt)),
         }
-        self.viewer = DummyViewer() if render else None
+        # Create proper viewer when rendering is enabled, otherwise use None
+        if render:
+            self.viewer = MuJoCoViewer(self.model, self.data)
+        else:
+            self.viewer = None
         self.controller = MJ_Controller(
             self.model, self.sim, self.viewer if render else False
         )
@@ -120,6 +119,17 @@ class GraspEnv(gym.Env, utils.EzPickle):
         self.step_called = 0
         observation = self.reset_model(show_obs=self.show_observations)
         self.current_observation = observation
+
+        # Abort immediately if no reachable goal could be sampled
+        if self.unreachable_goal:
+            print(
+                colored(
+                    "[Workspace] Aborting episode immediately - no reachable goal found at reset",
+                    color="red",
+                    attrs=["bold"],
+                )
+            )
+
         return observation
 
     def set_state(self, qpos, qvel):
@@ -179,10 +189,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
             info["is_success"] = 0.0
             info["her_reward"] = her_reward
             return self.current_observation, reward, done, info
-        # Parent class will step once during init to set up the observation space, controller is not yet available at that time.
+        # Parent class will step once during init to set up the observation space,
+        # controller is not yet available at that time.
         # Therefore we simply return a dictionary of zeros of the appropriate size.
         if not self.initialized:
-            # self.current_observation = np.zeros((200,200,4))
             self.current_observation = defaultdict()
             self.current_observation["rgb"] = np.zeros(
                 (self.IMAGE_HEIGHT, self.IMAGE_WIDTH, 3)
@@ -192,10 +202,20 @@ class GraspEnv(gym.Env, utils.EzPickle):
             )
             self.current_observation["desired_goal"] = self.desired_goal.copy()
             self.current_observation["achieved_goal"] = self.last_achieved_goal.copy()
+            self.current_observation["action_mask"] = np.ones(
+                self.IMAGE_HEIGHT * self.IMAGE_WIDTH, dtype=bool
+            )  # Default: all pixels reachable during init
             reward = 0
         else:
-            if self.step_called == 1:
-                self.current_observation = self.get_observation(show=False)
+            # Use the observation from the end of the previous step
+            # (or from reset if this is the first step after reset)
+            # The observation is updated at the end of each step to ensure it reflects
+            # the current state after the previous action
+            if self.step_called == 0:
+                # First step after reset - observation should already be set by reset()
+                # But ensure we have a fresh one if needed
+                if not hasattr(self, 'current_observation') or self.current_observation is None:
+                    self.current_observation = self.get_observation(show=False)
             self._refresh_desired_goal()
             goal_before_action = self.desired_goal.copy()
             achieved_goal = self._get_end_effector_position()
@@ -236,54 +256,74 @@ class GraspEnv(gym.Env, utils.EzPickle):
             # Depth value for the pixel corresponding to the action
             depth = self.current_observation["depth"][y][x]
 
-            coordinates = self.controller.pixel_2_world(
-                pixel_x=x,
-                pixel_y=y,
-                depth=depth,
-                height=self.IMAGE_HEIGHT,
-                width=self.IMAGE_WIDTH,
-            )
-            print(
-                colored(
-                    "Action ({}): Pixel X: {}, Pixel Y: {}, Rotation: {} ({} deg)".format(
-                        action_info, x, y, rotation, self.rotations[rotation]
-                    ),
-                    color="blue",
-                    attrs=["bold"],
-                )
-            )
-            print(
-                colored(
-                    "Transformed into world coordinates: {}".format(coordinates[:2]),
-                    color="blue",
-                    attrs=["bold"],
-                )
-            )
-
-            # Check for coordinates we don't need to try to save some time
-            if coordinates[2] < 0.8 or coordinates[1] > -0.3:
+            # Validate depth value BEFORE conversion to catch invalid pixels early
+            if depth <= 0.0 or depth > 2.0:
+                msg = ("Action ({}): Pixel X: {}, Pixel Y: {}, Rotation: {} "
+                       "({} deg), Depth: {:.4f} -> INVALID DEPTH (skipping)")
                 print(
                     colored(
-                        "Skipping execution due to bad depth value!",
+                        msg.format(
+                            action_info, x, y, rotation,
+                            self.rotations[rotation], depth
+                        ),
                         color="red",
                         attrs=["bold"],
                     )
                 )
-                # Binary reward
                 reward = -0.3
                 reach_success = False
                 grasp_coordinates = None
-
+                grasped_something = False  # Ensure it's set to False for invalid depth
             else:
-                grasped_something, grasp_coordinates, reach_success = (
-                    self.move_and_grasp(
-                        coordinates,
-                        rotation,
-                        render=self.render_enabled,
-                        record_grasps=record_grasps,
-                        markers=markers,
+                coordinates = self.controller.pixel_2_world(
+                    pixel_x=x,
+                    pixel_y=y,
+                    depth=depth,
+                    height=self.IMAGE_HEIGHT,
+                    width=self.IMAGE_WIDTH,
+                )
+                print(
+                    colored(
+                        "Action ({}): Pixel X: {}, Pixel Y: {}, Rotation: {} ({} deg), Depth: {:.4f}".format(
+                            action_info, x, y, rotation, self.rotations[rotation], depth
+                        ),
+                        color="blue",
+                        attrs=["bold"],
                     )
                 )
+                print(
+                    colored(
+                        "Transformed into world coordinates: [{:.4f}, {:.4f}, {:.4f}]".format(
+                            coordinates[0], coordinates[1], coordinates[2]
+                        ),
+                        color="blue",
+                        attrs=["bold"],
+                    )
+                )
+
+                # Check for coordinates we don't need to try to save some time
+                if coordinates[2] < 0.8 or coordinates[1] > -0.3:
+                    print(
+                        colored(
+                            "Skipping execution due to bad coordinates!",
+                            color="red",
+                            attrs=["bold"],
+                        )
+                    )
+                    # Binary reward
+                    reward = -0.3
+                    reach_success = False
+                    grasp_coordinates = None
+                else:
+                    grasped_something, grasp_coordinates, reach_success = (
+                        self.move_and_grasp(
+                            coordinates,
+                            rotation,
+                            render=self.render_enabled,
+                            record_grasps=record_grasps,
+                            markers=markers,
+                        )
+                    )
 
             if grasped_something:
                 if self.last_grasped_object_pose is None:
@@ -304,7 +344,8 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 achieved_goal = self._get_end_effector_position()
 
             self.last_achieved_goal = achieved_goal
-            her_reward = float(self.compute_reward(achieved_goal, goal_before_action))
+            # Compute her_reward after determining grasped_something for consistency
+            her_reward = float(self.compute_reward(achieved_goal, goal_before_action, grasp_success=grasped_something))
             if grasped_something:
                 reward = 5.0
             elif not reach_success:
@@ -350,7 +391,8 @@ class GraspEnv(gym.Env, utils.EzPickle):
 
     def set_grasp_position(self, position):
         """
-        Legacy method, not used in the current setup. May be used to directly set the joint values to a desired position.
+        Legacy method, not used in the current setup.
+        May be used to directly set the joint values to a desired position.
         """
 
         joint_angles = self.controller.ik(position)
@@ -383,7 +425,6 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.TABLE_HEIGHT + height_action * (0.1) / self.action_space.nvec[1],
             decimals=3,
         )
-        # return np.round(max(self.TABLE_HEIGHT, self.TABLE_HEIGHT + height_action * (depth_height - self.TABLE_HEIGHT)/self.action_space.nvec[1]), decimals=3)
 
     def move_and_grasp(
         self,
@@ -434,7 +475,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
 
         # Move to grasping height
         coordinates_2 = copy.deepcopy(coordinates)
-        coordinates_2[2] = max(self.TABLE_HEIGHT, coordinates_2[2] - 0.01)
+        GRASP_MIN = self.TABLE_HEIGHT + 0.01
+        GRASP_MAX = 1.10  # same as your pre-grasp z
+
+        coordinates_2[2] = np.clip(self.TABLE_HEIGHT + 0.02, GRASP_MIN, GRASP_MAX)
         result2 = self.controller.move_ee(
             coordinates_2,
             max_steps=500,
@@ -517,7 +561,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.last_grasped_object_name = None
 
         if grasped_something and record_grasps:
-            capture_rgb, depth = self.controller.get_image_data(
+            capture_rgb, _ = self.controller.get_image_data(
                 width=800, height=800, camera="side"
             )
             self.grasp_counter += 1
@@ -533,15 +577,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.controller.stay(200, render=render)
 
         # Move back to zero rotation
-        result_rotate_back = self.rotate_wrist_3_joint_to_value(0)
+        self.rotate_wrist_3_joint_to_value(0)
 
         self.controller.actuators[0][4].Kp = 20.0
 
-        # if self.demo_mode:
-        #     self.controller.stay(200, render=render)
-        #     return 'demo'
-
-        # else:
         print("Results: ")
         print(
             "Move to pre grasp position: ".ljust(40, " "),
@@ -553,10 +592,13 @@ class GraspEnv(gym.Env, utils.EzPickle):
         print(
             "Rotate gripper: ".ljust(40, " "), result_rotate, ",", steps_rotate, "steps"
         )
+        move_to_grasp_str = (
+            f"Move to grasping position (z="
+            f"{np.round(coordinates_2[2], decimals=4) if isinstance(coordinates_2, np.ndarray) else 0}"
+            f"):"
+        )
         print(
-            f"Move to grasping position (z={np.round(coordinates_2[2], decimals=4) if isinstance(coordinates_2, np.ndarray) else 0}):".ljust(
-                40, " "
-            ),
+            move_to_grasp_str.ljust(40, " "),
             result2,
             ",",
             steps2,
@@ -595,8 +637,6 @@ class GraspEnv(gym.Env, utils.EzPickle):
             print(colored("Did not grasp anything.", color="red", attrs=["bold"]))
             return False, coordinates_2, reach_success
 
-    # @debug
-    # @dict2list
     def get_observation(self, show=True):
         """
         Uses the controllers get_image_data method to return an top-down image (as a np-array).
@@ -611,13 +651,82 @@ class GraspEnv(gym.Env, utils.EzPickle):
             width=self.IMAGE_WIDTH, height=self.IMAGE_HEIGHT, show=show
         )
         depth = self.controller.depth_2_meters(depth)
+
+        # Diagnostic: Check if depth image is all zeros (indicates rendering issue)
+        if np.all(depth == 0.0):
+            print(
+                colored(
+                    f"[WARNING] Depth image is all zeros! Depth range: [{depth.min():.4f}, {depth.max():.4f}], "
+                    f"Non-zero pixels: {np.count_nonzero(depth)} / {depth.size}",
+                    color="yellow",
+                    attrs=["bold"],
+                )
+            )
+        elif np.sum((depth > 0) & (depth <= 2.0)) < depth.size * 0.1:
+            # Less than 10% of pixels have valid depth
+            valid_pixels = np.sum((depth > 0) & (depth <= 2.0))
+            print(
+                colored(
+                    f"[WARNING] Very few valid depth pixels: {valid_pixels} / {depth.size} "
+                    f"({100*valid_pixels/depth.size:.1f}%)",
+                    color="yellow",
+                    attrs=["bold"],
+                )
+            )
+
         observation = defaultdict()
         observation["rgb"] = rgb
         observation["depth"] = depth
         observation["desired_goal"] = self.desired_goal.copy()
         observation["achieved_goal"] = self.last_achieved_goal.copy()
 
+        # Compute action mask for reachable pixels
+        observation["action_mask"] = self._compute_action_mask(depth)
+
         return observation
+
+    def _compute_action_mask(self, depth):
+        """
+        Compute action mask for reachable pixel locations.
+
+        Args:
+            depth: Depth image (H, W)
+
+        Returns:
+            Boolean mask of shape (H*W,) where True indicates reachable pixels
+        """
+        mask = np.zeros(self.IMAGE_HEIGHT * self.IMAGE_WIDTH, dtype=bool)
+
+        x_min, x_max = self.workspace_bounds["x"]
+        y_min, y_max = self.workspace_bounds["y"]
+
+        for y in range(self.IMAGE_HEIGHT):
+            for x in range(self.IMAGE_WIDTH):
+                pixel_index = y * self.IMAGE_WIDTH + x
+                depth_value = depth[y, x]
+
+                # Skip invalid depth values
+                if depth_value <= 0 or depth_value > 2.0:
+                    continue
+
+                # Convert pixel to world coordinates
+                try:
+                    coordinates = self.controller.pixel_2_world(
+                        pixel_x=x,
+                        pixel_y=y,
+                        depth=depth_value,
+                        height=self.IMAGE_HEIGHT,
+                        width=self.IMAGE_WIDTH,
+                    )
+
+                    # Check if within workspace bounds (x, y only, z doesn't matter)
+                    if x_min <= coordinates[0] <= x_max and y_min <= coordinates[1] <= y_max:
+                        mask[pixel_index] = True
+                except Exception:
+                    # If conversion fails, mark as unreachable
+                    continue
+
+        return mask
 
     # @debug
     def reset_model(self, show_obs=True):
@@ -654,7 +763,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
 
             # Try to find a non-overlapping position
             max_attempts = 50
-            for attempt in range(max_attempts):
+            for _ in range(max_attempts):
                 x = np.random.uniform(low=-0.25, high=0.25)
                 y = np.random.uniform(low=-0.65, high=-0.45)
 
@@ -675,44 +784,10 @@ class GraspEnv(gym.Env, utils.EzPickle):
             placed_positions.append((x, y))
 
             qpos[start + 2] = np.random.uniform(low=1.0, high=1.5)
-            qpos[start + 3 : end] = Quaternion.random().unit.elements
+            qpos[start + 3: end] = Quaternion.random().unit.elements
 
         goal_ok = self._set_new_goal(qpos)
         self.unreachable_goal = not goal_ok
-
-        #########################################################################
-        # Reset for IT4, older versions of IT5
-
-        # n_boxes = 3
-        # n_balls = 3
-
-        # for j in ['rot', 'x', 'y', 'z']:
-        #     for i in range(1,n_boxes+1):
-        #         joint_name = 'box_' + str(i) + '_' + j
-        #         q_adr = self.model.get_joint_qpos_addr(joint_name)
-        #         if j == 'x':
-        #             qpos[q_adr] = np.random.uniform(low=-0.25, high=0.25)
-        #         elif j == 'y':
-        #             qpos[q_adr] = np.random.uniform(low=-0.17, high=0.17)
-        #         elif j == 'z':
-        #             qpos[q_adr] = 0.0
-        #         elif j == 'rot':
-        #             start, end = q_adr
-        #             qpos[start:end] = [1., 0., 0., 0.]
-
-        #     for i in range(1,n_balls+1):
-        #         joint_name = 'ball_' + str(i) + '_' + j
-        #         q_adr = self.model.get_joint_qpos_addr(joint_name)
-        #         if j == 'x':
-        #             qpos[q_adr] = np.random.uniform(low=-0.25, high=0.25)
-        #         elif j == 'y':
-        #             qpos[q_adr] = np.random.uniform(low=-0.17, high=0.17)
-        #         elif j == 'z':
-        #             qpos[q_adr] = 0.0
-        #         elif j == 'rot':
-        #             start, end = q_adr
-        #             qpos[start:end] = [1., 0., 0., 0.]
-        #########################################################################
 
         self.set_state(qpos, qvel)
 
@@ -812,15 +887,23 @@ class GraspEnv(gym.Env, utils.EzPickle):
                 return False
         return True
 
-    def compute_reward(self, achieved_goal, desired_goal):
+    def compute_reward(self, achieved_goal, desired_goal, grasp_success=False):
         """
         Compute reward based on distance between achieved and desired goal.
+        Only gives full reward if position is close AND something was grasped.
+        This prevents rewarding empty gripper movements to goal locations.
         No step penalty needed - GAMMA discounting already incentivizes faster grasps.
+
+        Args:
+            achieved_goal: The achieved goal position
+            desired_goal: The desired goal position
+            grasp_success: Whether something was actually grasped (default: False)
         """
         achieved_goal = np.array(achieved_goal, dtype=np.float32)
         desired_goal = np.array(desired_goal, dtype=np.float32)
         distance = np.linalg.norm(achieved_goal[:2] - desired_goal[:2])
-        if distance <= self.goal_tolerance:
+        # Full reward only if position is close AND something was grasped
+        if distance <= self.goal_tolerance and grasp_success:
             return 0.5
         clipped_distance = min(distance, 1.0)
         shaping = -0.25 * clipped_distance

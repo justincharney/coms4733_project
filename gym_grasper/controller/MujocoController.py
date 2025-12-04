@@ -9,15 +9,18 @@ from collections import defaultdict
 from pathlib import Path
 
 import cv2 as cv
+import math
 import matplotlib.pyplot as plt
 import mujoco as mj
 import numpy as np
 from ikpy.chain import Chain
-from pyquaternion import Quaternion
 from simple_pid import PID
 from termcolor import colored
-
-from decorators import debug
+try:
+    import glfw
+    GLFW_AVAILABLE = True
+except ImportError:
+    GLFW_AVAILABLE = False
 
 
 class DummyViewer:
@@ -31,6 +34,234 @@ class DummyViewer:
 
     def close(self):
         return None
+
+
+class MuJoCoViewer:
+    """Interactive MuJoCo viewer for real-time visualization using GLFW and OpenGL."""
+
+    def __init__(self, model, data):
+        self.model = model
+        self.data = data
+        self.window = None
+        self.scene = None
+        self.context = None
+        self.cam = None
+        self.opt = None
+        self.running = False
+        self._glfw_initialized = False
+
+        # Mouse state for interactive camera control
+        self._button_left = False
+        self._button_middle = False
+        self._button_right = False
+        self._last_mouse_x = 0
+        self._last_mouse_y = 0
+
+        if not GLFW_AVAILABLE:
+            print(
+                colored(
+                    "GLFW not available. Cannot create interactive viewer. Install with: pip install glfw",
+                    color="yellow",
+                )
+            )
+            return
+
+        try:
+            # Initialize GLFW and create window (must be on main thread on macOS)
+            # Since environment is typically created on main thread, initialize directly
+            self._init_viewer()
+        except Exception as e:
+            print(
+                colored(
+                    f"Failed to launch MuJoCo viewer: {e}. Running in headless mode.",
+                    color="yellow",
+                )
+            )
+            self._cleanup()
+            self.window = None
+
+    def _init_viewer(self):
+        """Initialize the GLFW window and MuJoCo rendering context."""
+        try:
+            # Initialize GLFW (must be on main thread on macOS)
+            if not self._glfw_initialized:
+                if not glfw.init():
+                    raise RuntimeError("Failed to initialize GLFW")
+                self._glfw_initialized = True
+
+            # Create window
+            self.window = glfw.create_window(1200, 900, "MuJoCo Simulation", None, None)
+            if not self.window:
+                if self._glfw_initialized:
+                    glfw.terminate()
+                    self._glfw_initialized = False
+                raise RuntimeError("Failed to create GLFW window")
+
+            glfw.make_context_current(self.window)
+
+            # Initialize MuJoCo scene, context, and camera
+            self.scene = mj.MjvScene(self.model, maxgeom=10000)
+            self.context = mj.MjrContext(self.model, mj.mjtFontScale.mjFONTSCALE_150)
+            self.cam = mj.MjvCamera()
+            self.opt = mj.MjvOption()
+
+            # Use free camera for interactive control
+            # Initialize camera to a good starting position (similar to side camera)
+            self.cam.type = mj.mjtCamera.mjCAMERA_FREE
+            self.cam.fixedcamid = -1
+            self.cam.trackbodyid = -1
+
+            # Set initial camera position and orientation (similar to side camera view)
+            # Position: (2.0, -0.6, 1.0), looking at the workspace center
+            self.cam.lookat[:] = [0.0, -0.6, 0.91]  # Center of workspace at table height
+            self.cam.distance = 2.5  # Distance from lookat point
+            self.cam.azimuth = 45.0  # Horizontal rotation
+            self.cam.elevation = -20.0  # Vertical angle (negative = looking down)
+
+            # Set up mouse callbacks for interactive camera control
+            glfw.set_mouse_button_callback(self.window, self._mouse_button)
+            glfw.set_cursor_pos_callback(self.window, self._mouse_move)
+            glfw.set_scroll_callback(self.window, self._mouse_scroll)
+
+            print(
+                colored(
+                    "Interactive camera enabled! Controls: Left drag=rotate, Right drag=pan, Scroll=zoom",
+                    color="cyan",
+                )
+            )
+
+            self.running = True
+
+            print(
+                colored(
+                    "MuJoCo viewer launched successfully. You should see a visualization window.",
+                    color="green",
+                )
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to initialize viewer: {e}")
+
+    def _mouse_button(self, window, button, act, mods):
+        """Handle mouse button events for camera control."""
+        self._button_left = (
+            glfw.get_mouse_button(window, glfw.MOUSE_BUTTON_LEFT) == glfw.PRESS
+        )
+        self._button_middle = (
+            glfw.get_mouse_button(window, glfw.MOUSE_BUTTON_MIDDLE) == glfw.PRESS
+        )
+        self._button_right = (
+            glfw.get_mouse_button(window, glfw.MOUSE_BUTTON_RIGHT) == glfw.PRESS
+        )
+
+        # Update mouse position
+        self._last_mouse_x, self._last_mouse_y = glfw.get_cursor_pos(window)
+
+    def _mouse_move(self, window, xpos, ypos):
+        """Handle mouse movement for camera rotation and panning."""
+        if not self.cam:
+            return
+
+        # Compute mouse movement
+        dx = xpos - self._last_mouse_x
+        dy = ypos - self._last_mouse_y
+
+        width, height = glfw.get_framebuffer_size(window)
+
+        # Left button: rotate camera
+        if self._button_left:
+            # Rotate around lookat point
+            self.cam.azimuth -= dx * 0.5
+            self.cam.elevation += dy * 0.5
+
+            # Clamp elevation
+            self.cam.elevation = max(-90.0, min(90.0, self.cam.elevation))
+
+        # Right button: pan camera (translate lookat point)
+        elif self._button_right:
+            # Calculate pan amount based on camera distance
+            scale = self.cam.distance * 0.001
+            # Pan in camera's local right/up directions
+            # Simplified: pan in world x/y based on azimuth
+            rad = math.radians(self.cam.azimuth)
+            self.cam.lookat[0] += dx * scale * math.cos(rad)
+            self.cam.lookat[1] += dx * scale * math.sin(rad)
+            self.cam.lookat[2] -= dy * scale
+
+        self._last_mouse_x = xpos
+        self._last_mouse_y = ypos
+
+    def _mouse_scroll(self, window, xoffset, yoffset):
+        """Handle mouse scroll for camera zoom."""
+        if not self.cam:
+            return
+        # Zoom in/out by adjusting distance
+        self.cam.distance *= (1.0 - 0.1 * yoffset)
+        # Clamp distance
+        self.cam.distance = max(0.1, min(100.0, self.cam.distance))
+
+    def _cleanup(self):
+        """Clean up GLFW resources."""
+        if self.window:
+            try:
+                glfw.destroy_window(self.window)
+            except Exception:
+                pass
+            self.window = None
+
+        if self._glfw_initialized:
+            try:
+                glfw.terminate()
+            except Exception:
+                pass
+            self._glfw_initialized = False
+
+    def render(self):
+        """Update the viewer with current simulation state.
+        Must be called from the main thread on macOS.
+        """
+        if self.window is None or not self.running:
+            return
+
+        try:
+            # Check if window should close
+            if glfw.window_should_close(self.window):
+                self.running = False
+                return
+
+            # Poll events (non-blocking, must be on main thread on macOS)
+            glfw.poll_events()
+
+            # Make sure we have the right context
+            if glfw.get_current_context() != self.window:
+                glfw.make_context_current(self.window)
+
+            # Get viewport size
+            width, height = glfw.get_framebuffer_size(self.window)
+            viewport = mj.MjrRect(0, 0, width, height)
+
+            # Update scene with current simulation state
+            mj.mjv_updateScene(
+                self.model, self.data, self.opt, None, self.cam, mj.mjtCatBit.mjCAT_ALL, self.scene
+            )
+
+            # Render
+            mj.mjr_render(viewport, self.scene, self.context)
+            glfw.swap_buffers(self.window)
+        except Exception:
+            # Silently handle errors (window might be closed)
+            pass
+
+    def add_marker(self, *args, **kwargs):  # noqa: D401 - matches mujoco-py API
+        """Add marker to the scene (placeholder for compatibility)."""
+        # Markers can be added to the scene if needed
+        pass
+
+    def close(self):
+        """Close the viewer."""
+        self.running = False
+        self._cleanup()
+        if self.context:
+            self.context = None
 
 
 class MjSimWrapper:
@@ -313,13 +544,13 @@ class MJ_Controller(object):
         Creates some basic lists and fill them with initial values. This function is called in the class costructor.
         The following lists/dictionaries are created:
 
-        - controller_list: Contains a controller for each of the actuated joints. This is done so that different gains may be
-        specified for each controller.
+        - controller_list: Contains a controller for each of the actuated joints.
+        This is done so that different gains may be specified for each controller.
 
         - current_joint_value_targets: Same as the current setpoints for all controllers, created for convenience.
 
-        - current_output = A list containing the ouput values of all the controllers. This list is only initiated here, its
-        values are overwritten at the first simulation step.
+        - current_output = A list containing the ouput values of all the controllers. This list is only initiated here,
+          its values are overwritten at the first simulation step.
 
         - actuators: 2D list, each entry represents one actuator and contains:
             0 actuator ID
@@ -333,7 +564,6 @@ class MJ_Controller(object):
 
         # Values for training
         sample_time = 0.0001
-        # p_scale = 1
         p_scale = 3
         i_scale = 0.0
         i_gripper = 0
@@ -408,10 +638,6 @@ class MJ_Controller(object):
                 sample_time=sample_time,
             )
         )  # Gripper Joint - increased P gain for stronger grip
-        # self.controller_list.append(PID(10.5*p_scale, 0.2, 0.1*d_scale, setpoint=0.0, output_limits=(-1, 1), sample_time=sample_time)) # Gripper Joint
-        # self.controller_list.append(PID(2*p_scale, 0.1*i_scale, 0.05*d_scale, setpoint=0.2, output_limits=(-0.5, 0.8), sample_time=sample_time)) # Finger 2 Joint 1
-        # self.controller_list.append(PID(1*p_scale, 0.1*i_scale, 0.05*d_scale, setpoint=0.0, output_limits=(-0.5, 0.8), sample_time=sample_time)) # Middle Finger Joint 1
-        # self.controller_list.append(PID(1*p_scale, 0.1*i_scale, 0.05*d_scale, setpoint=-0.1, output_limits=(-0.8, 0.8), sample_time=sample_time)) # Gripperpalm Finger 1 Joint
 
         self.current_target_joint_values = [
             self.controller_list[i].setpoint for i in range(len(self.sim.data.ctrl))
@@ -463,7 +689,8 @@ class MJ_Controller(object):
             tolerance: Threshold within which the error of each joint must be before the method finishes.
             max_steps: maximum number of steps to actuate before breaking
             plot: If True, a .png image of the group joint trajectories will be saved to the local directory.
-                  This can be used for PID tuning in case of overshoot etc. The name of the file will be "Joint_angles_" + a number.
+                  This can be used for PID tuning in case of overshoot etc.
+                  The name of the file will be "Joint_angles_" + a number.
             marker: If True, a colored visual marker will be added into the scene to visualize the current
                     cartesian target.
         """
@@ -638,7 +865,8 @@ class MJ_Controller(object):
         Args:
             ee_position: List of XYZ-coordinates of the end-effector (ee_link for UR5 setup).
             plot: If True, a .png image of the arm joint trajectories will be saved to the local directory.
-                  This can be used for PID tuning in case of overshoot etc. The name of the file will be "Joint_angles_" + a number.
+                  This can be used for PID tuning in case of overshoot etc.
+                  The name of the file will be "Joint_angles_" + a number.
             marker: If True, a colored visual marker will be added into the scene to visualize the current
                     cartesian target.
         """
@@ -647,7 +875,6 @@ class MJ_Controller(object):
             result = self.move_group_to_joint_target(
                 group="Arm", target=joint_angles, **kwargs
             )
-            # result = self.move_group_to_joint_target(group='Arm', target=joint_angles, tolerance=0.05, plot=plot, marker=marker, max_steps=max_steps, quiet=quiet, render=render)
         else:
             result = "No valid joint angles received, could not move EE to position."
             self.last_movement_steps = 0
@@ -680,7 +907,6 @@ class MJ_Controller(object):
             # By adding the appr. distance between ee_link and grasp center, we can now specify a world target position
             # for the grasp center instead of the ee_link
             gripper_center_position = ee_position_base + [0, -0.005, 0.16]
-            # gripper_center_position = ee_position_base + [0, 0, 0.185]
 
             # Use the current joint configuration as the IK seed to satisfy joint limits.
             initial_position = [0.0]
@@ -719,27 +945,6 @@ class MJ_Controller(object):
             print(e)
             print("Could not find an inverse kinematics solution.")
             return None
-
-    def ik_2(self, pose_target):
-        """
-        TODO: Implement orientation.
-        """
-        target_position = pose_target[:3]
-        target_position -= self.sim.data.xpos[self.body_name2id("base_link")]
-        orientation = Quaternion(pose_target[3:])
-        target_orientation = orientation.rotation_matrix
-        target_matrix = orientation.transformation_matrix
-        target_matrix[0][-1] = target_position[0]
-        target_matrix[1][-1] = target_position[1]
-        target_matrix[2][-1] = target_position[2]
-        print(target_matrix)
-        self.current_carthesian_target = pose_target[:3]
-        joint_angles = self.ee_chain.inverse_kinematics_frame(
-            target_matrix, initial_position=initial_position, orientation_mode="all"
-        )
-        joint_angles = joint_angles[1:-1]
-        current_finger_values = self.sim.data.qpos[self.actuated_joint_ids][6:]
-        target = [*joint_angles, *current_finger_values]
 
     def display_current_values(self):
         """
@@ -940,8 +1145,6 @@ class MJ_Controller(object):
             cv.imshow("rbg", cv.cvtColor(rgb, cv.COLOR_RGB2BGR))
             # cv.imshow('depth', depth)
             cv.waitKey(1)
-            # cv.waitKey(delay=5000)
-            # cv.destroyAllWindows()
 
         return rgb, depth
 
@@ -1110,5 +1313,5 @@ class MJ_Controller(object):
                     show=False,
                 )
                 self.video_recorder.frames.append(rgb)
-            except Exception as e:
+            except Exception:
                 pass  # Silently skip frame on error

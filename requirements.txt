@@ -10,7 +10,7 @@ fonttools==4.60.1
 fsspec==2025.10.0
 glfw==2.10.0
 grpcio==1.76.0
-gym==0.21.0
+gym==0.26.0
 ikpy==3.1
 importlib_metadata==8.7.0
 importlib_resources==6.5.2
@@ -26,6 +26,7 @@ networkx==3.2.1
 numpy==1.23.5
 opencv-python-headless==4.9.0.80
 packaging==25.0
+pandas==2.1.0
 pillow==11.3.0
 pluggy==1.6.0
 prettytable==3.16.0
@@ -44,8 +45,8 @@ tensorboard==2.20.0
 tensorboard-data-server==0.7.2
 termcolor==3.1.0
 tomli==2.3.0
-torch==2.8.0
-torchvision==0.23.0
+torch==2.2.2
+torchvision==0.17.2
 tqdm==4.67.1
 typing_extensions==4.15.0
 wcwidth==0.2.14
