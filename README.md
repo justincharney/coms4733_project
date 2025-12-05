@@ -188,7 +188,7 @@ Visualize training progress from CSV files generated during training.
 python SAC_Agent/plot_training.py SAC_Agent/logs/sac_finetune_20240101_120000.csv
 
 # Save plots to different directory
-python SAC_Agent/plot_training.py SAC_Agent/logs/ --output SAC_Agent/plots/
+python SAC_Agent/plot_training.py SAC_Agent/logs/ --output plots/
 ```
 
 **Options:**
@@ -206,13 +206,14 @@ Evaluate a trained model on the grasping environment and compute performance met
 
 ```bash
 # From project root directory
+# ⚠️ On headless servers: xvfb-run -a python SAC_Agent/evaluate_model.py ...
 
 # Basic evaluation (100 episodes)
-python SAC_Agent/evaluate_model.py --model-path SAC_Agent/Models/sac_finetune_final.pt
+python SAC_Agent/evaluate_model.py --model-path SAC_Agent/Models/sac_finetune_best.pt
 
 # With rendering (visualize evaluation)
 python SAC_Agent/evaluate_model.py \
-    --model-path SAC_Agent/Models/sac_finetune_final.pt \
+    --model-path SAC_Agent/Models/sac_finetune_best.pt \
     --episodes 100 \
     --render
 ```
@@ -237,11 +238,11 @@ Run a visual demonstration of the trained model performing grasping tasks.
 # From project root directory
 
 # Basic demo (5 episodes with rendering)
-python demo.py --model-path SAC_Agent/Models/sac_finetune_final.pt
+python demo.py --model-path SAC_Agent/Models/sac_finetune_best.pt
 
 # Without rendering (faster)
 python demo.py \
-    --model-path SAC_Agent/Models/sac_finetune_final.pt \
+    --model-path SAC_Agent/Models/sac_finetune_best.pt \
     --episodes 5 \
     --no-render
 ```
@@ -280,12 +281,12 @@ python SAC_Agent/plot_training.py SAC_Agent/logs/
 
 # Step 4: Evaluate the model
 python SAC_Agent/evaluate_model.py \
-    --model-path SAC_Agent/Models/sac_finetune_final.pt \
+    --model-path SAC_Agent/Models/sac_finetune_best.pt \
     --episodes 100
 
 # Step 5: Run visual demo
 python demo.py \
-    --model-path SAC_Agent/Models/sac_finetune_final.pt \
+    --model-path SAC_Agent/Models/sac_finetune_best.pt \
     --episodes 10
 ```
 
