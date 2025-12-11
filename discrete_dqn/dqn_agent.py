@@ -277,9 +277,12 @@ class DQNAgent:
             q_selected.append(q_values[i, row, col, rotation_idx])
         q_selected = torch.stack(q_selected)
 
-        # Convert rewards to targets (binary classification: success/failure)
-        # As per milestone: gamma=0, so we predict immediate reward
-        targets = torch.from_numpy(rewards).float().to(self.device)
+        # Convert rewards to binary targets (binary classification: success/failure)
+        # Binary cross-entropy requires targets in [0, 1]
+        # Reward > 0 means success (1), reward <= 0 means failure (0)
+        targets = (torch.from_numpy(rewards) > 0).float().to(self.device)
+        # Clamp to ensure targets are exactly in [0, 1] range
+        targets = torch.clamp(targets, min=0.0, max=1.0)
 
         # Binary cross-entropy loss (as per milestone document)
         # Convert Q-values to probabilities using sigmoid

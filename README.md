@@ -326,6 +326,13 @@ python discrete_dqn/evaluate_model.py \
     --model-path discrete_dqn/Models/dqn_baseline_best.pt \
     --episodes 100 \
     --render
+
+# With full environment for motion quality metrics (jerk, acceleration)
+# Note: This uses GraspingEnv which actually moves the robot (slower but provides motion metrics)
+python discrete_dqn/evaluate_model.py \
+    --model-path discrete_dqn/Models/dqn_baseline_best.pt \
+    --episodes 100 \
+    --use-full-env
 ```
 
 **Options:**
@@ -334,10 +341,18 @@ python discrete_dqn/evaluate_model.py \
 - `--render`: Render the environment during evaluation
 - `--no-save`: Don't save results to CSV
 - `--results-dir`: Directory to save evaluation results (default: "discrete_dqn/evaluation_results")
+- `--use-full-env`: Use `GraspingEnv` instead of `FastGraspEnv` for evaluation. **Required for meaningful motion quality metrics** (jerk, acceleration). Note: This will be slower as it actually moves the robot. Without this flag, motion metrics will be zero because `FastGraspEnv` doesn't move the robot.
+- `--max-episode-steps`: Maximum steps per episode (default: 100). Note: `FastGraspEnv` always terminates after 1 step, so this mainly applies when using `--use-full-env`.
 
 **Output:**
-- Console: Summary statistics (success rate, rewards, episode lengths)
+- Console: Summary statistics (success rate, rewards, episode lengths, motion quality metrics)
 - CSV file: `discrete_dqn/evaluation_results/evaluation_{model_name}_{timestamp}.csv` (if saved)
+
+**Note on Motion Quality Metrics:**
+- By default, DQN evaluation uses `FastGraspEnv` which doesn't move the robot (fast pixel-based rewards only)
+- Motion quality metrics (jerk, acceleration) require actual robot motion, so they will be zero with `FastGraspEnv`
+- Use `--use-full-env` flag to evaluate with `GraspingEnv` which moves the robot and provides meaningful motion metrics
+- Collision detection works with both environments since it doesn't require motion
 
 ### 8. DQN Plot Training Curves
 
@@ -419,6 +434,13 @@ python discrete_dqn/plot_training.py discrete_dqn/logs/
 python discrete_dqn/evaluate_model.py \
     --model-path discrete_dqn/Models/dqn_baseline_best.pt \
     --episodes 100
+
+# Step 3b: (Optional) Evaluate with full environment for motion quality metrics
+# ⚠️ On headless servers: xvfb-run -a python discrete_dqn/evaluate_model.py ...
+python discrete_dqn/evaluate_model.py \
+    --model-path discrete_dqn/Models/dqn_baseline_best.pt \
+    --episodes 100 \
+    --use-full-env
 ```
 
 ## Key Features
@@ -438,6 +460,12 @@ python discrete_dqn/evaluate_model.py \
 - RMS acceleration
 - Collision detection
 - Vertical overshoot tracking
+
+**Note:** Motion quality metrics (jerk, acceleration) require actual robot motion. They are only meaningful when:
+- Evaluating SAC models (which use `GraspingEnv` with robot motion)
+- Evaluating DQN models with `--use-full-env` flag (uses `GraspingEnv` instead of `FastGraspEnv`)
+
+When using `FastGraspEnv` (default for DQN evaluation), motion metrics will be zero because the robot doesn't move. Collision detection works with both environments.
 
 ## File Outputs
 

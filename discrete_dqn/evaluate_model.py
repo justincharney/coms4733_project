@@ -37,6 +37,8 @@ def evaluate_model(
     render=False,
     save_results=True,
     results_dir="evaluation_results",
+    use_full_env=False,
+    max_episode_steps=100,
 ):
     """
     Evaluate a trained DQN model.
@@ -47,6 +49,8 @@ def evaluate_model(
         render: Whether to render the environment
         save_results: Whether to save results to CSV
         results_dir: Directory to save evaluation results
+        use_full_env: Whether to use GraspingEnv instead of FastGraspEnv
+        max_episode_steps: Maximum steps per episode (to prevent infinite episodes)
 
     Returns:
         Dictionary with evaluation metrics
@@ -71,13 +75,28 @@ def evaluate_model(
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         csv_file = results_path / f"evaluation_{model_path.stem}_{timestamp}.csv"
 
-    # Create environment (FastGraspEnv for DQN baseline)
-    env = FastGraspEnv(
-        image_width=200,
-        image_height=200,
-        show_obs=False,
-        render=render,
-    )
+    # Create environment
+    # Note: FastGraspEnv doesn't move the robot, so motion metrics will be zero.
+    # Use --use-full-env flag to use GraspingEnv for meaningful motion metrics.
+    if use_full_env:
+        from gym_grasper.envs.GraspingEnv import GraspEnv
+        env = GraspEnv(
+            image_width=200,
+            image_height=200,
+            show_obs=False,
+            render=render,
+        )
+        print("Using GraspingEnv (full robot simulation) for evaluation")
+    else:
+        env = FastGraspEnv(
+            image_width=200,
+            image_height=200,
+            show_obs=False,
+            render=render,
+        )
+        print("Using FastGraspEnv (no robot motion) for evaluation")
+        print("  Note: Motion metrics (jerk, acceleration) will be zero with FastGraspEnv.")
+        print("  Use --use-full-env flag to get meaningful motion metrics.")
 
     # Initialize DQN agent (must match training configuration)
     agent = DQNAgent(
@@ -140,6 +159,7 @@ def evaluate_model(
             pass  # Action mask not critical
 
         # Try to update metrics with initial state (FastGraspEnv may not have full MuJoCo state)
+        metrics_updated = False
         try:
             if hasattr(env, 'data') and hasattr(env, 'controller') and hasattr(env, 'dt'):
                 if hasattr(env.controller, 'actuated_joint_ids') and hasattr(env, 'ee_body_id'):
@@ -149,11 +169,17 @@ def evaluate_model(
                         ee_body_id=env.ee_body_id,
                         dt=env.dt,
                     )
-        except Exception:
-            pass  # Metrics update may fail if FastGraspEnv doesn't have full state
+                    metrics_updated = True
+        except Exception as e:
+            # Metrics update may fail if FastGraspEnv doesn't have full state
+            if len(episode_rewards) == 0:  # Only print once
+                print(f"Warning: Could not update metrics at reset: {e}")
 
-        # Episode loop (FastGraspEnv: done=True after one action, but we loop for consistency)
-        while not done:
+        # Episode loop
+        # FastGraspEnv: done=True after one action (contextual bandit)
+        # GraspingEnv: done=True when object is grasped or max steps reached
+        step_count = 0
+        while not done and step_count < max_episode_steps:
             # Select deterministic action (no exploration)
             action = agent.select_action(observation, deterministic=True, action_mask=action_mask)
 
@@ -170,11 +196,15 @@ def evaluate_model(
                             ee_body_id=env.ee_body_id,
                             dt=env.dt,
                         )
-            except Exception:
-                pass  # Metrics update may fail if FastGraspEnv doesn't have full state
+                        metrics_updated = True
+            except Exception as e:
+                # Metrics update may fail if FastGraspEnv doesn't have full state
+                if len(episode_rewards) == 0:  # Only print once
+                    print(f"Warning: Could not update metrics after step: {e}")
 
-            episode_reward = reward
-            episode_length = 1  # Always 1 step for FastGraspEnv
+            episode_reward += reward
+            episode_length += 1
+            step_count += 1
             if info.get("is_success", 0) or reward > 0:
                 episode_success = 1.0
 
@@ -183,13 +213,29 @@ def evaluate_model(
         # Compute motion quality metrics for this episode
         try:
             motion_metrics = metrics_tracker.compute_all_metrics()
+
+            # Debug: Check if we have data for motion metrics
+            if len(episode_rewards) == 0:  # Only print once
+                num_acc_samples = len(metrics_tracker.joint_accelerations)
+                num_vel_samples = len(metrics_tracker.joint_velocities)
+                num_pos_samples = len(metrics_tracker.joint_positions)
+                print(f"Debug: Metrics tracker has {num_pos_samples} position, "
+                      f"{num_vel_samples} velocity, {num_acc_samples} acceleration samples")
+                print(f"Debug: Metrics updated successfully: {metrics_updated}")
+                if isinstance(env, FastGraspEnv):
+                    print("Warning: FastGraspEnv does not move the robot, "
+                          "so motion metrics (jerk, acceleration) will be zero.")
+                    print("         Use GraspingEnv for evaluation if you need motion quality metrics.")
+
             episode_motion_metrics.append({
                 "mean_jerk": motion_metrics.get("mean_jerk", 0.0),
                 "rms_acceleration": motion_metrics.get("rms_acceleration", 0.0),
                 "total_collisions": motion_metrics.get("total_collisions", 0),
             })
-        except Exception:
+        except Exception as e:
             # If metrics computation fails, use default values
+            if len(episode_rewards) == 0:  # Only print once
+                print(f"Warning: Could not compute motion metrics: {e}")
             episode_motion_metrics.append({
                 "mean_jerk": 0.0,
                 "rms_acceleration": 0.0,
@@ -294,6 +340,20 @@ Examples:
         default=None,
         help="Directory to save evaluation results (default: discrete_dqn/evaluation_results)",
     )
+    parser.add_argument(
+        "--use-full-env",
+        action="store_true",
+        help="Use GraspingEnv instead of FastGraspEnv for evaluation. "
+             "Required for meaningful motion quality metrics (jerk, acceleration). "
+             "Note: This will be slower as it actually moves the robot.",
+    )
+    parser.add_argument(
+        "--max-episode-steps",
+        type=int,
+        default=100,
+        help="Maximum steps per episode (default: 100). "
+             "Note: FastGraspEnv always terminates after 1 step, so this mainly applies when using --use-full-env.",
+    )
 
     args = parser.parse_args()
 
@@ -316,6 +376,8 @@ Examples:
             render=args.render,
             save_results=not args.no_save,
             results_dir=results_dir,
+            use_full_env=args.use_full_env,
+            max_episode_steps=args.max_episode_steps,
         )
         print("\nEvaluation completed successfully!")
         if summary["csv_file"]:
