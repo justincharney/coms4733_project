@@ -1,12 +1,19 @@
 # Robotic Grasping with SAC and HER
 
-This project implements a Soft Actor-Critic (SAC) reinforcement learning agent with Hindsight Experience Replay (HER) for robotic grasping tasks using MuJoCo simulation.
+This project implements a Soft Actor-Critic (SAC) reinforcement learning agent with Hindsight Experience Replay (HER) for robotic grasping tasks using MuJoCo simulation. It also includes a DQN baseline implementation for comparison.
 
 ## Overview
 
-The training pipeline consists of two stages:
+The project includes two main approaches:
+
+### SAC Training Pipeline (Two-Stage)
 1. **Stage 1: Vision Pretraining** - Fast training on pixel-based rewards (no robot motion)
 2. **Stage 2: Fine-tuning** - Full training with robot motion, IK, and HER
+
+### DQN Baseline
+- **DQN Training** - Discrete Q-Network baseline with ResNet architecture
+- Uses epsilon-greedy exploration and binary cross-entropy loss
+- Fast training on pixel-based rewards (no robot motion)
 
 ## Installation
 
@@ -68,6 +75,14 @@ coms4733_project/
 │   ├── finetune_sac_model.py     # Stage 2: Fine-tuning script
 │   ├── evaluate_model.py          # Model evaluation script
 │   └── plot_training.py           # Plot training curves
+├── discrete_dqn/
+│   ├── network.py            # DQN ResNet architecture
+│   ├── dqn_agent.py          # DQN agent implementation
+│   ├── training_logger.py    # Training logger with CSV export
+│   ├── eval_utils.py         # Shared evaluation utilities
+│   ├── train_dqn.py          # DQN training script
+│   ├── evaluate_model.py     # DQN evaluation script
+│   └── plot_training.py      # Plot DQN training curves
 ├── gym_grasper/
 │   ├── envs/
 │   │   ├── GraspingEnv.py     # Full grasping environment
@@ -91,9 +106,10 @@ Before training, you can visualize the grasping environment to understand its st
 # From project root directory
 
 # Basic visualization (display in OpenCV window)
+# ⚠️ On headless servers: xvfb-run -a python visualize_env.py
 python visualize_env.py
 
-# Save visualization images instead of displaying
+# Save visualization images instead of displaying (no xvfb needed)
 python visualize_env.py --mode save
 ```
 
@@ -184,11 +200,14 @@ Visualize training progress from CSV files generated during training.
 ```bash
 # From project root directory
 
-# Plot a specific CSV file
+# Plot SAC training curves (no xvfb needed - just reads CSV files)
 python SAC_Agent/plot_training.py SAC_Agent/logs/sac_finetune_20240101_120000.csv
 
 # Save plots to different directory
 python SAC_Agent/plot_training.py SAC_Agent/logs/ --output plots/
+
+# Plot DQN training curves (no xvfb needed)
+python discrete_dqn/plot_training.py discrete_dqn/logs/dqn_baseline_20240101_120000.csv
 ```
 
 **Options:**
@@ -238,9 +257,10 @@ Run a visual demonstration of the trained model performing grasping tasks.
 # From project root directory
 
 # Basic demo (5 episodes with rendering)
+# ⚠️ On headless servers: xvfb-run -a python demo.py ...
 python demo.py --model-path SAC_Agent/Models/sac_finetune_best.pt
 
-# Without rendering (faster)
+# Without rendering (faster, no xvfb needed)
 python demo.py \
     --model-path SAC_Agent/Models/sac_finetune_best.pt \
     --episodes 5 \
@@ -258,36 +278,147 @@ python demo.py \
 - Visual demonstration of the robot performing grasping tasks
 - Console: Episode-by-episode results and summary statistics
 
-## Complete Training Pipeline Example
+### 6. DQN Baseline Training
+
+Train the DQN baseline network on FastGraspEnv using epsilon-greedy exploration.
+
+```bash
+# From project root directory
+
+# Basic usage (default: 1480 episodes as per milestone)
+# ⚠️ On headless servers: xvfb-run -a python discrete_dqn/train_dqn.py
+python discrete_dqn/train_dqn.py
+
+# Custom configuration
+python discrete_dqn/train_dqn.py \
+    --episodes 2000 \
+    --save-interval 10 \
+    --model-name dqn_baseline \
+    --batch-size 32
+```
+
+**Options:**
+- `--episodes`: Number of training episodes (default: 1480)
+- `--save-interval`: Save checkpoint every N episodes if improving (default: 10)
+- `--model-name`: Name for the model (default: "dqn_baseline")
+- `--log-dir`: Directory for log files (default: "discrete_dqn/logs")
+- `--models-dir`: Directory for model checkpoints (default: "discrete_dqn/Models")
+- `--batch-size`: Batch size for training (default: 32)
+
+**Output:**
+- Model checkpoints: `discrete_dqn/Models/dqn_baseline_best.pt`, `discrete_dqn/Models/dqn_baseline_final.pt`
+- Training logs: `discrete_dqn/logs/dqn_baseline_*.log`
+- Training metrics: `discrete_dqn/logs/dqn_baseline_*.csv`
+
+### 7. DQN Evaluation
+
+Evaluate a trained DQN model on the grasping environment.
+
+```bash
+# From project root directory
+# ⚠️ On headless servers: xvfb-run -a python discrete_dqn/evaluate_model.py ...
+
+# Basic evaluation (100 episodes)
+python discrete_dqn/evaluate_model.py --model-path discrete_dqn/Models/dqn_baseline_best.pt
+
+# With rendering (visualize evaluation)
+python discrete_dqn/evaluate_model.py \
+    --model-path discrete_dqn/Models/dqn_baseline_best.pt \
+    --episodes 100 \
+    --render
+```
+
+**Options:**
+- `--model-path`: Path to saved model checkpoint (.pt file) **[required]**
+- `--episodes`: Number of evaluation episodes (default: 100)
+- `--render`: Render the environment during evaluation
+- `--no-save`: Don't save results to CSV
+- `--results-dir`: Directory to save evaluation results (default: "discrete_dqn/evaluation_results")
+
+**Output:**
+- Console: Summary statistics (success rate, rewards, episode lengths)
+- CSV file: `discrete_dqn/evaluation_results/evaluation_{model_name}_{timestamp}.csv` (if saved)
+
+### 8. DQN Plot Training Curves
+
+Visualize DQN training progress from CSV files.
+
+```bash
+# From project root directory
+
+# Plot a specific CSV file (no xvfb needed)
+python discrete_dqn/plot_training.py discrete_dqn/logs/dqn_baseline_20240101_120000.csv
+
+# Plot all CSV files in directory
+python discrete_dqn/plot_training.py discrete_dqn/logs/
+
+# Save plots to different directory
+python discrete_dqn/plot_training.py discrete_dqn/logs/ --output plots/
+```
+
+**Options:**
+- `csv_path`: Path to CSV file or directory containing CSV files
+- `--output`: Directory to save plots (default: same as CSV file location)
+- `--no-show`: Don't display plots interactively, just save them
+
+**Output:**
+- Plot files: `discrete_dqn/logs/{model_name}_{timestamp}_training_curves.png`
+- Shows: Reward curves, loss curves, success rate, epsilon decay, Q-value statistics
+
+## Complete Training Pipeline Examples
+
+### SAC Training Pipeline
 
 ```bash
 # From project root directory
 
 # Step 0: (Optional) Visualize environment to understand structure
+# ⚠️ On headless servers: xvfb-run -a python visualize_env.py
 python visualize_env.py
 
 # Step 1: Pretrain vision model
-# ⚠️ On headless servers, use: xvfb-run -a python SAC_Agent/pretrain_vision_model.py
+# ⚠️ On headless servers: xvfb-run -a python SAC_Agent/pretrain_vision_model.py
 python SAC_Agent/pretrain_vision_model.py --episodes 3000
 
 # Step 2: Fine-tune with full robot motion
-# ⚠️ On headless servers, use: xvfb-run -a python SAC_Agent/finetune_sac_model.py
+# ⚠️ On headless servers: xvfb-run -a python SAC_Agent/finetune_sac_model.py
 python SAC_Agent/finetune_sac_model.py \
     --episodes 1000 \
     --pretrained SAC_Agent/Models/pretrain_vision_best.pt
 
-# Step 3: Plot training curves
+# Step 3: Plot training curves (no xvfb needed)
 python SAC_Agent/plot_training.py SAC_Agent/logs/
 
 # Step 4: Evaluate the model
+# ⚠️ On headless servers: xvfb-run -a python SAC_Agent/evaluate_model.py ...
 python SAC_Agent/evaluate_model.py \
     --model-path SAC_Agent/Models/sac_finetune_best.pt \
     --episodes 100
 
 # Step 5: Run visual demo
+# ⚠️ On headless servers: xvfb-run -a python demo.py ...
 python demo.py \
     --model-path SAC_Agent/Models/sac_finetune_best.pt \
     --episodes 10
+```
+
+### DQN Baseline Training Pipeline
+
+```bash
+# From project root directory
+
+# Step 1: Train DQN baseline
+# ⚠️ On headless servers: xvfb-run -a python discrete_dqn/train_dqn.py
+python discrete_dqn/train_dqn.py --episodes 1480
+
+# Step 2: Plot training curves (no xvfb needed)
+python discrete_dqn/plot_training.py discrete_dqn/logs/
+
+# Step 3: Evaluate the model
+# ⚠️ On headless servers: xvfb-run -a python discrete_dqn/evaluate_model.py ...
+python discrete_dqn/evaluate_model.py \
+    --model-path discrete_dqn/Models/dqn_baseline_best.pt \
+    --episodes 100
 ```
 
 ## Key Features
@@ -310,16 +441,27 @@ python demo.py \
 
 ## File Outputs
 
-### Training
+### SAC Training
 - **Models**: `SAC_Agent/Models/{model_name}_best.pt`, `SAC_Agent/Models/{model_name}_final.pt`
 - **Logs**: `SAC_Agent/logs/{model_name}_{timestamp}.log`
 - **Metrics CSV**: `SAC_Agent/logs/{model_name}_{timestamp}.csv`
 
-### Evaluation
+### SAC Evaluation
 - **Results CSV**: `SAC_Agent/evaluation_results/evaluation_{model_name}_{timestamp}.csv`
 
-### Visualization
+### SAC Visualization
 - **Training Curves**: `SAC_Agent/logs/{model_name}_{timestamp}_training_curves.png`
+
+### DQN Training
+- **Models**: `discrete_dqn/Models/{model_name}_best.pt`, `discrete_dqn/Models/{model_name}_final.pt`
+- **Logs**: `discrete_dqn/logs/{model_name}_{timestamp}.log`
+- **Metrics CSV**: `discrete_dqn/logs/{model_name}_{timestamp}.csv`
+
+### DQN Evaluation
+- **Results CSV**: `discrete_dqn/evaluation_results/evaluation_{model_name}_{timestamp}.csv`
+
+### DQN Visualization
+- **Training Curves**: `discrete_dqn/logs/{model_name}_{timestamp}_training_curves.png`
 
 ## Troubleshooting
 
@@ -365,9 +507,29 @@ xvfb-run -a python SAC_Agent/finetune_sac_model.py
 - For software rendering: `export MUJOCO_GL=osmesa`
 - Note: `--no-render` flag only disables visualization, not depth rendering (which is required for training)
 
+## Command Reference: When to Use xvfb-run
+
+**Commands that NEED `xvfb-run -a` (on headless servers):**
+- `python SAC_Agent/pretrain_vision_model.py` - Uses FastGraspEnv (needs rendering for depth)
+- `python SAC_Agent/finetune_sac_model.py` - Uses GraspEnv (needs rendering for depth)
+- `python SAC_Agent/evaluate_model.py` - Uses GraspEnv (needs rendering for depth)
+- `python discrete_dqn/train_dqn.py` - Uses FastGraspEnv (needs rendering for depth)
+- `python discrete_dqn/evaluate_model.py` - Uses FastGraspEnv (needs rendering for depth)
+- `python visualize_env.py` - Uses OpenCV window (needs display)
+- `python demo.py` - Uses rendering (needs display)
+
+**Commands that DON'T need `xvfb-run` (no rendering required):**
+- `python SAC_Agent/plot_training.py` - Just reads CSV files and plots
+- `python discrete_dqn/plot_training.py` - Just reads CSV files and plots
+- `python visualize_env.py --mode save` - Saves images without display
+- `python demo.py --no-render` - Disables rendering
+
+**Note:** Even with `--no-render` flags, MuJoCo still needs OpenGL context for depth rendering. The `--no-render` flag only disables visualization windows, not depth image computation.
+
 ## Notes
 
 - **Deterministic actions during evaluation**: When evaluating a trained model (using `evaluate_model.py` or `demo.py`), the agent uses deterministic actions (always picks the most likely action) rather than sampling from the action distribution. This provides consistent, reproducible results and represents the agent's best performance without exploration noise.
 - Progress bars (tqdm) show real-time metrics during training
 - All metrics are automatically logged to CSV for analysis
 - HER is automatically disabled for fast pretraining mode (goal_dim=0)
+- DQN baseline uses epsilon-greedy exploration and binary cross-entropy loss (gamma=0, no target network)
