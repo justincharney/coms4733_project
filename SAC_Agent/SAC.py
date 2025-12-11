@@ -90,9 +90,10 @@ class SAC:
         if auto_alpha:
             # Target entropy for joint action (pixel, rotation)
             # log_probs in actor network is sum of pixel_log_prob + rotation_log_prob
-            self.target_entropy = np.log(pixel_action_dim * rotation_action_dim) * 0.98
+            self.target_entropy = -np.log(pixel_action_dim * rotation_action_dim) * 0.98
             self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
             self.alpha_optimizer = optim.Adam([self.log_alpha], lr=lr, weight_decay=0.0)
+            self.min_alpha = 0.02
         else:
             self.log_alpha = None
             self.alpha_optimizer = None
@@ -316,7 +317,7 @@ class SAC:
         q_pi = torch.min(q1_pi, q2_pi)
 
         # Actor loss: maximize (Q - alpha * log_prob)
-        alpha = self.log_alpha.exp() if self.auto_alpha else self.alpha
+        alpha = self.log_alpha.exp().clamp(min=0.01, max=10.0) if self.auto_alpha else self.alpha
         actor_loss = (alpha * log_probs.unsqueeze(1) - q_pi).mean()
 
         self.actor_optimizer.zero_grad()
@@ -327,11 +328,20 @@ class SAC:
         # Update alpha (temperature)
         alpha_loss = None
         if self.auto_alpha:
-            alpha_loss = -(self.log_alpha.exp() * (log_probs + self.target_entropy).detach()).mean()
+            entropy_error = (log_probs + self.target_entropy).detach()
+            alpha_loss = -(self.log_alpha * entropy_error).mean() * 0.5  # smaller updates
             self.alpha_optimizer.zero_grad()
             alpha_loss.backward()
             torch.nn.utils.clip_grad_norm_([self.log_alpha], max_norm=1.0)
             self.alpha_optimizer.step()
+
+            # clamp log_alpha so alpha doesn't go to 0
+            with torch.no_grad():
+                # force alpha >= min_alpha
+                self.log_alpha.clamp_(min=np.log(self.min_alpha))
+
+            alpha = self.log_alpha.exp()
+            self.alpha = alpha.item()
 
         # Soft update target networks
         self._soft_update(self.q_network_1, self.target_q_network_1)

@@ -26,7 +26,7 @@ def train_finetune_stage(
     log_dir="logs",
     models_dir="Models",
     pretrained_path=None,
-    max_episode_steps=100,
+    max_episode_steps=90,
 ):
     """
     Stage 2: Fine-tune SAC model on full GraspEnv with robot motion and HER.
@@ -87,7 +87,7 @@ def train_finetune_stage(
             logger.log("No pretrained model path specified and no default model found.", level="WARNING")
             logger.log(f"Expected location: {default_pretrained}", level="WARNING")
             logger.log("Starting training from scratch")
-    
+
     if pretrained_path and Path(pretrained_path).exists():
         logger.log(f"Loading pretrained model from: {pretrained_path}")
         try:
@@ -169,31 +169,53 @@ def train_finetune_stage(
 
         # Episode loop
         step_count = 0
+        prev_collisions = 0
         while not done and step_count < max_episode_steps:
             # Select action
             action = agent.select_action(observation, deterministic=False)
             step_count += 1
 
             # Take step
-            next_observation, reward, done, info = env.step(action)
+            next_observation, env_reward, done, info = env.step(action)
 
-            # Update metrics
+            # Base shaped reward: prefer HER reward if available
+            base_reward = info.get("her_reward", env_reward)
+
+            # Update metrics and compute collisions this step
+            collisions_this_step = 0
             try:
+                prev_collisions = getattr(metrics_tracker, "total_collisions", 0)
                 metrics_tracker.update(
                     mujoco_data=env.data,
                     actuated_joint_ids=env.controller.actuated_joint_ids,
                     ee_body_id=env.ee_body_id,
                     dt=env.dt,
                 )
+                new_collisions = getattr(metrics_tracker, "total_collisions", prev_collisions)
+                collisions_this_step = max(0, new_collisions - prev_collisions)
+                prev_collisions = new_collisions
             except Exception:
-                pass  # Metrics update may fail occasionally
+                pass  # metrics update may fail occasionally
 
-            # Store transition
+            # -------- collision penalty --------
+            collision_penalty = 0.1 * collisions_this_step  # tune 0.1 if needed
+            train_reward = base_reward - collision_penalty
+
+            info["collision_penalty"] = collision_penalty
+            info["collisions_this_step"] = collisions_this_step
+            # -----------------------------------
+
+            # Store transition with penalized shaped reward
             agent.store_transition(
-                observation, action, reward, next_observation, done, info
+                observation,
+                action,
+                train_reward,
+                next_observation,
+                done,
+                info,
             )
 
-            episode_reward += reward
+            episode_reward += train_reward
             episode_length += 1
             if info.get("is_success", 0) or info.get("grasp_success", 0):
                 episode_success = 1.0
@@ -227,12 +249,12 @@ def train_finetune_stage(
 
         # Compute running statistics
         recent_rewards = (
-            episode_rewards[-100:] if len(episode_rewards) >= 100 else episode_rewards
+            episode_rewards[-10:] if len(episode_rewards) >= 10 else episode_rewards
         )
         mean_reward = np.mean(recent_rewards)
         success_rate = (
-            np.mean(episode_successes[-100:])
-            if len(episode_successes) >= 100
+            np.mean(episode_successes[-10:])
+            if len(episode_successes) >= 10
             else np.mean(episode_successes)
         )
 

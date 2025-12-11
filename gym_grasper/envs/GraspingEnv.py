@@ -903,8 +903,9 @@ class GraspEnv(gym.Env, utils.EzPickle):
         desired_goal = np.array(desired_goal, dtype=np.float32)
         distance = np.linalg.norm(achieved_goal[:2] - desired_goal[:2])
         # Full reward only if position is close AND something was grasped
+        # Give small reward if position is close and something was grasped
         if distance <= self.goal_tolerance and grasp_success:
-            return 0.5
+            return 2.0
         clipped_distance = min(distance, 1.0)
         shaping = -0.25 * clipped_distance
         return shaping
