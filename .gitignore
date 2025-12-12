@@ -27,3 +27,5 @@ renders
 videos/
 *.png
 docs/
+.cache/
+.mplconfig/
