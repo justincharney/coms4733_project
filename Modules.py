@@ -50,10 +50,13 @@ class ReplayBuffer(object):
         self.memory[self.position] = t
         self.position = (self.position + 1) % self.size
         
-        # Check if reward is positive (successful grasp) and add to success buffer
+        # Add to success buffer only for true terminal successes, not dense shaping rewards.
         try:
             reward_val = float(args[3] if not self.simple else args[2])
-            if reward_val > 0.0:
+            done_val = 0.0
+            if not self.simple and len(args) >= 5:
+                done_val = float(args[4])
+            if done_val > 0.0 and reward_val > 0.0:
                 cap = max(1, self.size // 5)  # avoid zero when size is small
                 if len(self.success_memory) < cap:
                     self.success_memory.append(None)

@@ -859,7 +859,7 @@ class Grasp_Agent:
 
         self.optimizer.zero_grad()
 
-    def update_tensorboard(self, reward, action):
+    def update_tensorboard(self, reward, action, info=None):
         """
         Method for keeping track of tensorboard metrics.
 
@@ -870,12 +870,18 @@ class Grasp_Agent:
 
         rotation_action = action[1]
         self.last_1000_actions.append(rotation_action)
+        is_success = False
+        if info is not None:
+            try:
+                is_success = bool(info.get("grasp_success", 0.0) > 0.0)
+            except Exception:
+                is_success = False
         if self.last_action == "greedy":
             self.greedy_rotations[str(rotation_action)] += 1
-            if reward == 1:
+            if is_success:
                 self.greedy_rotations_successes[str(rotation_action)] += 1
         else:
-            if reward == 1:
+            if is_success:
                 self.random_rotations_successes[str(rotation_action)] += 1
 
         if self.steps_done % 1000 == 0:
@@ -901,9 +907,12 @@ class Grasp_Agent:
         env = self.env.unwrapped
         trajectory_length = len(episode_transitions)
         total_added = 0
-        positive_added = 0
+        success_added = 0
 
         for idx, transition in enumerate(episode_transitions):
+            # Skip successful grasps - no need to relabel, already have positive reward
+            if transition.get("grasped", False):
+                continue
             achieved_goal = transition["achieved_goal"]
             for _ in range(self.her_future_k):
                 future_idx = random.randint(idx, trajectory_length - 1)
@@ -913,9 +922,9 @@ class Grasp_Agent:
                 her_state = self.transform_observation(her_observation)
                 reward_value = env.compute_reward(achieved_goal, future_goal)
                 reward_tensor = torch.tensor([[reward_value]], dtype=torch.float32)
-                done_tensor = torch.tensor(
-                    [[float(transition["done"])]], dtype=torch.float32
-                )
+                # In HER, termination should reflect the relabeled goal, otherwise we bootstrap through "success".
+                her_done = bool(transition["done"]) or bool(reward_value >= 0.0)
+                done_tensor = torch.tensor([[float(her_done)]], dtype=torch.float32)
                 if GAMMA == 0.0:
                     self.memory.push(
                         her_state, transition["action"].clone(), reward_tensor
@@ -932,10 +941,10 @@ class Grasp_Agent:
                         done_tensor,
                     )
                 total_added += 1
-                if reward_value > 0.0:
-                    positive_added += 1
+                if her_done and reward_value >= 0.0:
+                    success_added += 1
 
-        return total_added, positive_added
+        return total_added, success_added
 
 
 def main():
@@ -1021,7 +1030,7 @@ def main():
                     next_observation, reward, done, info = agent.env.unwrapped.step(
                         env_action, record_grasps=True, action_info=agent.last_action
                     )
-                    agent.update_tensorboard(reward, env_action)
+                    agent.update_tensorboard(reward, env_action, info=info)
 
                     # Track episode-level metrics
                     episode_reward += reward

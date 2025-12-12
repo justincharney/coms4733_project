@@ -306,7 +306,7 @@ class GraspEnv(gym.Env, utils.EzPickle):
             self.last_achieved_goal = achieved_goal
             her_reward = float(self.compute_reward(achieved_goal, goal_before_action))
             if grasped_something:
-                reward = 5.0
+                reward = 1.0
             elif not reach_success:
                 # Explicit penalty for IK/reach failures
                 reward = -0.2
@@ -821,7 +821,8 @@ class GraspEnv(gym.Env, utils.EzPickle):
         desired_goal = np.array(desired_goal, dtype=np.float32)
         distance = np.linalg.norm(achieved_goal[:2] - desired_goal[:2])
         if distance <= self.goal_tolerance:
-            return 0.5
+            # Keep reaching reward non-positive to prevent farming shaped rewards.
+            return 0.0
         clipped_distance = min(distance, 1.0)
         shaping = -0.25 * clipped_distance
         return shaping
